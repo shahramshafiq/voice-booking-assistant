@@ -1,0 +1,21 @@
+[
+  {
+    "id": "consultation",
+    "name": "Consultation",
+    "duration_minutes": 60,
+    "description": "A one hour first meeting to discuss what you need."
+  },
+  {
+    "id": "follow_up",
+    "name": "Follow-up",
+    "duration_minutes": 30,
+    "description": "A short half hour check-in for existing customers."
+  },
+  {
+    "id": "extended_consultation",
+    "name": "Extended consultation",
+    "duration_minutes": 90,
+    "description": "A longer ninety minute session for bigger topics.",
+    "min_notice_minutes": 180
+  }
+]
