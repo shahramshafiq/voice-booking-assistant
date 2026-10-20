@@ -131,6 +131,8 @@ class Turn:
                     still_going = await self._speak(data)
                 elif kind == "scripted":
                     still_going = await self._speak(data, force=True, trusted=True)
+                elif kind == "tool_start":
+                    await self._early_filler(data, answer_is_ready=not queue.empty())
                 elif kind == "tools":
                     still_going = await self._speak("", force=True)  # say what is written before the pause
                     if still_going:
@@ -216,6 +218,25 @@ class Turn:
             self.model_chunks.append(text)
         await self.send_event({"type": "assistant_text", "text": text + " "})
         await self.tts.send_text(self._context_id, text + " ", flush=flush)
+
+    async def _early_filler(self, name, answer_is_ready):
+        """The model has just begun a tool request. Writing its arguments takes another second or so, and a
+        second model call follows the tool, so say the filler phrase right now. Skipped when something was
+        already said, or when the answer is already waiting in the queue (the early draft finished everything
+        before the caller did)."""
+        if self.sent_chunks or self._buffer.strip() or answer_is_ready:
+            return
+        if self.runner.is_write(name):
+            if not self.runner.expects_confirmed_change(name, self.ctx):
+                return  # most likely only the confirmation question, which is instant and needs no filler
+            phrases = self.settings.tool_filler_write
+        else:
+            phrases = self.settings.tool_filler_read
+        if not phrases:
+            return
+        self.timer.mark("filler_sent")
+        await self._emit_chunk(phrases[self.turn_id % len(phrases)], flush=True, model=False)
+        self._first_sent = False  # the first real phrase after the filler is flushed at once
 
     async def _maybe_say_filler(self, calls):
         """While a tool works, say a short phrase so the line never goes silent. Skipped when something was

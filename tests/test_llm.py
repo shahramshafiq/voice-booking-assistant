@@ -58,9 +58,10 @@ def test_text_and_a_tool_request_are_read_in_order():
     llm, seen = make_client(events)
     result = asyncio.run(collect(llm))
     assert [(e.kind, e.text) for e in result[:2]] == [("text", "Let me "), ("text", "look. ")]
-    assert result[2].kind == "tool_call"
-    assert result[2].call == {"id": "fc_1", "call_id": "call_1", "name": "find_available_slots", "arguments": "{\"service_id\":\"consultation\"}"}
-    assert len(result) == 3  # the finished message item is not mistaken for a tool request
+    assert result[2].kind == "tool_start" and result[2].call == {"name": "find_available_slots"}  # the name arrives first
+    assert result[3].kind == "tool_call"
+    assert result[3].call == {"id": "fc_1", "call_id": "call_1", "name": "find_available_slots", "arguments": "{\"service_id\":\"consultation\"}"}
+    assert len(result) == 4  # the message item is not mistaken for a tool request
 
     body = seen["body"]
     assert body["stream"] is True and body["instructions"] == "be nice" and body["model"] == settings.openai_model

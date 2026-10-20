@@ -6,6 +6,7 @@ what ends up in the calendar, and what the memory holds.
 """
 import asyncio
 import json
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -63,6 +64,7 @@ class FakeTTS:
 
     def __init__(self, settings):
         self.said = []  # (text, flush)
+        self.said_at = []  # when each phrase arrived
         self.contexts_opened = 0
         self.contexts_cancelled = 0
         FakeTTS.instances.append(self)
@@ -78,6 +80,7 @@ class FakeTTS:
     async def send_text(self, context_id, text, flush=False):
         context = self._contexts[context_id]
         self.said.append((text.strip(), flush))
+        self.said_at.append(time.monotonic())
         if not context["first"]:
             context["first"] = True
             await context["on_first_audio"]()
@@ -105,6 +108,7 @@ class ScriptedLLM:
     def __init__(self, *rounds):
         self.rounds = list(rounds)
         self.calls = []
+        self.tool_call_at = None  # when the last tool request was completed
 
     async def stream(self, instructions, input_items, tools, allow_tools=True):
         self.calls.append({"instructions": instructions, "input": json.loads(json.dumps(input_items)), "tools": tools, "allow_tools": allow_tools})
@@ -112,11 +116,20 @@ class ScriptedLLM:
             raise AssertionError("the model was called more often than the test expected")
         events = self.rounds.pop(0)
         for event in (events(input_items) if callable(events) else events):
+            if isinstance(event, float):  # a number in the script means 'the model is slow here for this many seconds'
+                await asyncio.sleep(event)
+                continue
+            if getattr(event, "kind", "") == "tool_call":
+                self.tool_call_at = time.monotonic()
             yield event
 
 
 def text(content):
     return LLMEvent("text", text=content)
+
+
+def tool_start(name):
+    return LLMEvent("tool_start", call={"name": name})
 
 
 def tool(name, **arguments):
@@ -339,6 +352,63 @@ def test_a_filler_covers_a_slow_tool_and_the_pause_is_primed(monkeypatch):
         assert second[1] is True  # and the first phrase after the pause is flushed too
         # the filler is not part of what the model said, so it is not in the memory
         assert bench.session.memory.messages[-1]["content"] == "I have nine tomorrow. Shall I book it?"
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_the_filler_starts_when_the_tool_request_starts_not_when_it_is_finished(monkeypatch):
+    slots = tool("find_available_slots", service_id="consultation", date_range={"start_date": "tomorrow"})
+    llm = ScriptedLLM([tool_start("find_available_slots"), 0.4, slots], [text("I have nine tomorrow. Shall I book it?")])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        await bench.say("what is free tomorrow", draft=False)
+        assert bench.tts.said[0][0] in settings.tool_filler_read
+        assert bench.tts.said_at[0] < llm.tool_call_at - 0.2  # said while the model was still writing the arguments
+        assert len([t for t, _ in bench.tts.said if t in settings.tool_filler_read]) == 1  # and only once
+        assert bench.tts.said[1][1] is True  # the answer after it is flushed at once
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_no_filler_when_the_early_draft_already_has_the_answer(monkeypatch):
+    slots = tool("find_available_slots", service_id="consultation", date_range={"start_date": "tomorrow"})
+    llm = ScriptedLLM([tool_start("find_available_slots"), slots], [text("I have nine tomorrow. Shall I book it?")])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        await bench.say("what is free tomorrow", draft=True)  # everything is finished before the caller is
+        assert not [t for t, _ in bench.tts.said if t in settings.tool_filler_read]
+        assert bench.tts.spoken == "I have nine tomorrow. Shall I book it?"
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_early_filler_for_a_change_only_when_the_caller_is_saying_yes(monkeypatch):
+    book = dict(customer_details={"name": "Ali Raza", "phone": "03001234567"}, service_id="consultation",
+                start_time="2026-10-20T09:00:00+05:00", end_time="2026-10-20T10:00:00+05:00")
+    llm = ScriptedLLM(
+        [tool_start("create_booking"), 0.3, tool("create_booking", **book)],  # turn 1: only the confirmation question
+        [tool_start("create_booking"), 0.3, tool("create_booking", **book)],  # turn 2: the caller says yes
+        [text("All done.")],
+    )
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        await bench.say("Book tomorrow at nine, Ali Raza, 0300 1234567", draft=False)
+        assert not [t for t, _ in bench.tts.said if t in settings.tool_filler_write]  # no filler before a question
+        assert bench.tts.spoken.startswith("Just to confirm")
+        before = len(bench.tts.said)
+        await bench.say("Yes please", draft=False)
+        fillers = [(t, at) for (t, _), at in zip(bench.tts.said[before:], bench.tts.said_at[before:]) if t in settings.tool_filler_write]
+        assert len(fillers) == 1 and fillers[0][1] < llm.tool_call_at - 0.1  # spoken while the arguments were still coming
+        assert len(bench.fake_google.events) == 1
         await bench.stop()
 
     run(scenario())

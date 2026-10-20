@@ -2,6 +2,7 @@
 
 The loop only produces things to say. It reports them with emit(kind, data):
   ("text", "...")      a piece of the model's answer
+  ("tool_start", name) the model has begun a tool request (the arguments are still being written)
   ("tools", [...])     the model asked for tools; the list holds each tool's name and running task
   ("scripted", "...")  text written by the code itself (for example the confirmation question)
 The Turn (turn.py) turns these into speech.
@@ -54,6 +55,8 @@ async def run_agent(*, llm, runner, memory, ctx, settings, instructions, history
             async for event in llm.stream(instructions, build_input(), runner.definitions, allow_tools=not last_round):
                 if event.kind == "text":
                     await emit("text", event.text)
+                elif event.kind == "tool_start":
+                    await emit("tool_start", event.call["name"])
                 else:
                     # start the tool now, while the model is still finishing its message
                     task = asyncio.create_task(runner.run(event.call["name"], event.call["arguments"], ctx))

@@ -122,6 +122,18 @@ class ToolRunner:
             return False
         return bool(self._yes and self._yes.search(cleaned))
 
+    def expects_confirmed_change(self, name, ctx):
+        """Will this change tool probably run for real, because the caller is saying yes to the question just asked?
+        Used before the model has finished writing the arguments, so it can only look at what the caller said."""
+        pending = self.memory.pending
+        upcoming_turn = ctx.turn_no or self.memory.turn_no + 1
+        return (
+            pending is not None
+            and pending.tool == name
+            and pending.turn_no == upcoming_turn - 1
+            and self.is_affirmative(ctx.user_text)
+        )
+
     # ================================================================ the one entry point
     async def run(self, name, raw_arguments, ctx):
         started = time.perf_counter()

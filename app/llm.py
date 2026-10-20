@@ -17,7 +17,7 @@ log = logging.getLogger("llm")
 
 class LLMEvent(NamedTuple):
     """Something the model produced: a piece of text, or a complete request to use a tool."""
-    kind: str  # "text" or "tool_call"
+    kind: str  # "text", "tool_start" (a tool request has begun, only its name is known) or "tool_call" (complete)
     text: str = ""
     call: Optional[dict] = None  # {"id", "call_id", "name", "arguments"}
 
@@ -80,6 +80,9 @@ class LLMClient:
                 if kind == "response.output_text.delta":
                     if event.delta:
                         yield LLMEvent("text", text=event.delta)
+                elif kind == "response.output_item.added" and getattr(event.item, "type", None) == "function_call":
+                    # the model has started a tool request: its name is known a second or so before its arguments are done
+                    yield LLMEvent("tool_start", call={"name": event.item.name})
                 elif kind == "response.output_item.done" and getattr(event.item, "type", None) == "function_call":
                     item = event.item
                     yield LLMEvent("tool_call", call={"id": item.id, "call_id": item.call_id, "name": item.name, "arguments": item.arguments})
