@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Voice Booking Assistant</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <main>
+        <h1>Voice Booking Assistant</h1>
+        <p class="hint">Book, check, move or cancel an appointment by talking. Use headphones for the best results. Without them the assistant can hear itself.</p>
+
+        <div class="controls">
+            <button id="toggle">Start conversation</button>
+            <span id="status" class="pill idle">Idle</span>
+        </div>
+
+        <p id="interim" class="interim"></p>
+        <p id="error" class="error" hidden></p>
+        <p id="warning" class="error" hidden></p>
+
+        <section class="panel">
+            <h2>Conversation</h2>
+            <div id="log"></div>
+        </section>
+
+        <section class="panel">
+            <h2>Tools used</h2>
+            <p class="hint">What the assistant asked the booking system to do. Changes only happen after you say yes.</p>
+            <table id="tools"><tbody><tr><td>No tool used yet.</td></tr></tbody></table>
+        </section>
+
+        <section class="panel">
+            <h2>Latency of the last reply</h2>
+            <p class="hint">All times are in milliseconds, measured from the moment the system decided you had finished speaking. A negative number means the work started earlier, while it was guessing ahead.</p>
+            <table id="metrics"><tbody><tr><td>No reply yet.</td></tr></tbody></table>
+            <p id="average" class="hint"></p>
+        </section>
+    </main>
+    <script src="/static/app.js"></script>
+</body>
+</html>
