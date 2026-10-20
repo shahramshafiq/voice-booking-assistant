@@ -1,0 +1,102 @@
+"""The output guardrail: checks every phrase the assistant is about to SPEAK, before it goes to the voice.
+
+It works on the small phrases the text is already cut into for the voice, with plain code, so it adds
+no noticeable delay. It stops:
+  - secrets (API keys, the calendar token) being read out;
+  - the assistant's own instructions being read out;
+  - a claim like "I have booked it" when no booking change really succeeded in this turn;
+  - a booking reference, said after the word "reference", that no tool ever returned (a made-up number).
+Phrases that pass are also cleaned for speech: no markdown, links or emoji, and long numbers are
+read digit by digit.
+"""
+import logging
+import re
+from dataclasses import dataclass
+
+from ..booking.speech import spell_digits
+
+log = logging.getLogger("guardrail.output")
+
+SECRET_PATTERNS = [
+    re.compile(r"ya29\.[A-Za-z0-9._-]{10,}"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._-]{12,}", re.IGNORECASE),
+]
+
+BOOKED = {"create_booking", "reschedule_booking", "get_booking"}  # a looked-up booking may also be called confirmed
+CLAIMS = [
+    (re.compile(r"\b(?:i(?:'ve| have)|we(?:'ve| have)) (?:now |just |already )?(?:booked|scheduled)\b"
+                r"|\b(?:your (?:appointment|booking|consultation|follow-up|session)|it)(?:'s| is| has been| was) (?:now )?(?:booked|confirmed|scheduled)\b"
+                r"|\byou(?:'re| are) (?:booked|confirmed)\b|\bbooking (?:is )?confirmed\b", re.IGNORECASE), BOOKED),
+    (re.compile(r"\b(?:i(?:'ve| have)|we(?:'ve| have)) (?:now |just |already )?cancell?ed\b"
+                r"|\byour (?:appointment|booking|consultation|follow-up|session)(?: is| has been| was) (?:now )?cancell?ed\b", re.IGNORECASE), {"cancel_booking"}),
+    (re.compile(r"\b(?:i(?:'ve| have)|we(?:'ve| have)) (?:now |just |already )?(?:rescheduled|moved)\b"
+                r"|\byour (?:appointment|booking|consultation|follow-up|session)(?: is| has been| was) (?:now )?(?:rescheduled|moved)\b", re.IGNORECASE), {"reschedule_booking"}),
+    (re.compile(r"\byou(?:'re| are) all set\b", re.IGNORECASE), {"create_booking", "reschedule_booking", "cancel_booking"}),
+]
+
+REFERENCE_MENTION = re.compile(r"\b(?:reference|ref)\b[^0-9]{0,25}(\d(?:[ ,.-]{0,2}\d)*)", re.IGNORECASE)
+EMOJI = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF]")
+
+
+@dataclass
+class OutputVerdict:
+    ok: bool
+    text: str  # the cleaned phrase when ok, otherwise the replacement to say
+    reason: str = ""
+
+
+def _words(text):
+    return re.findall(r"[a-z0-9']+", text.lower())
+
+
+class OutputRail:
+    def __init__(self, settings, instructions):
+        self.settings = settings
+        self.secrets = [value for value in (
+            settings.openai_api_key, settings.deepgram_api_key, settings.elevenlabs_api_key, settings.google_calendar_api_token,
+        ) if len(value) >= 8]
+        # only the RULES part of the prompt is protected; the business information is meant to be spoken
+        rules = _words(instructions.split("BUSINESS INFORMATION")[0])
+        self.rule_phrases = {tuple(rules[i:i + 7]) for i in range(len(rules) - 6)}
+
+    def check(self, phrase, tail, achieved, known_refs):
+        """`tail` is the end of the previous phrase, so a sentence cut in two is still checked as one.
+        `achieved` is the set of tools that really succeeded in this conversation."""
+        joined = f"{tail} {phrase}".replace("\u2019", "'").strip()
+
+        if any(secret in phrase for secret in self.secrets) or any(p.search(phrase) for p in SECRET_PATTERNS):
+            return self._block("secret", self.settings.output_block_reply)
+
+        words = _words(joined)
+        if any(tuple(words[i:i + 7]) in self.rule_phrases for i in range(len(words) - 6)):
+            return self._block("prompt_leak", self.settings.output_block_reply)
+
+        for pattern, needed in CLAIMS:
+            if pattern.search(joined) and not (needed & achieved):
+                return self._block("unconfirmed_claim", self.settings.output_unconfirmed_reply)
+
+        for number in self._mentioned_references(joined):
+            if number not in known_refs:
+                return self._block("unknown_reference", self.settings.output_unconfirmed_reply)
+
+        return OutputVerdict(True, self._clean_for_speech(phrase))
+
+    # ---------------------------------------------------------------- helpers
+    def _block(self, reason, replacement):
+        log.warning("output blocked: %s", reason)
+        return OutputVerdict(False, replacement, reason)
+
+    def _mentioned_references(self, text):
+        """Numbers said right after the word 'reference' (also one digit at a time, '4 8 2 1 7 6') that have a reference's length."""
+        runs = (re.sub(r"\D", "", m.group(1)) for m in REFERENCE_MENTION.finditer(text))
+        return [run for run in runs if len(run) == self.settings.booking_ref_digits]
+
+    @staticmethod
+    def _clean_for_speech(text):
+        text = re.sub(r"https?://\S+", "the link", text)
+        text = re.sub(r"[*_#`>]+", "", text)
+        text = EMOJI.sub("", text)
+        text = re.sub(r"\b\d{6,}\b", lambda m: spell_digits(m.group(0)), text)
+        text = re.sub(r"\s*\n+\s*", ". ", text)
+        return re.sub(r"\s{2,}", " ", text).strip()
