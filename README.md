@@ -64,7 +64,7 @@ voice-booking-assistant/
   prompts/               System prompt template
   scripts/               check_calendar.py (free Google Calendar check)
   static/                Web page, audio worklets, styles
-  tests/                 87 tests with fake services
+  tests/                 90 tests with fake services
 ```
 
 ## Getting Started
@@ -135,7 +135,7 @@ The page shows the live transcript, the tools that were used and a latency table
 python -m pytest
 ```
 
-The 87 tests use a fake Google Calendar, fake Deepgram and ElevenLabs connections and a scripted model, so they need no keys and cost nothing. They cover date parsing, slot maths, the booking rules, the confirmation gate, the guardrails and whole conversations.
+The 90 tests use a fake Google Calendar, fake Deepgram and ElevenLabs connections and a scripted model, so they need no keys and cost nothing. They cover date parsing, slot maths, the booking rules, the confirmation gate, the guardrails and whole conversations.
 
 ## Limitations and Roadmap
 
