@@ -1,0 +1,402 @@
+"""Reads every setting from the .env file.
+
+Nothing configurable (keys, model names, URLs, thresholds, business rules) is hardcoded anywhere else.
+If a value is missing or has the wrong type, startup stops and lists ALL the problems at once.
+"""
+import json
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from dotenv import load_dotenv
+
+from .booking.scheduling import parse_breaks, parse_business_hours
+
+load_dotenv()
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+class ConfigError(Exception):
+    """Raised when .env is missing a value or a value has the wrong type."""
+
+
+class _Reader:
+    """Small helper that reads typed values and remembers every problem it finds."""
+
+    def __init__(self):
+        self.problems = []
+
+    def _raw(self, name):
+        value = os.getenv(name)
+        if value is None or not value.strip():
+            self.problems.append(f"{name} is missing or empty")
+            return None
+        return value.strip()
+
+    def text(self, name):
+        value = self._raw(name)
+        return value if value is not None else ""
+
+    def integer(self, name):
+        value = self._raw(name)
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except ValueError:
+            self.problems.append(f"{name} must be a whole number, got {value!r}")
+            return 0
+
+    def number(self, name):
+        value = self._raw(name)
+        if value is None:
+            return 0.0
+        try:
+            return float(value)
+        except ValueError:
+            self.problems.append(f"{name} must be a number, got {value!r}")
+            return 0.0
+
+    def optional_number(self, name):
+        """Blank or missing means 'off' (returns None)."""
+        value = os.getenv(name)
+        if value is None or not value.strip():
+            return None
+        try:
+            return float(value.strip())
+        except ValueError:
+            self.problems.append(f"{name} must be a number or left empty, got {value!r}")
+            return None
+
+    def flag(self, name):
+        value = self._raw(name)
+        if value is None:
+            return False
+        if value.lower() in ("true", "1", "yes"):
+            return True
+        if value.lower() in ("false", "0", "no"):
+            return False
+        self.problems.append(f"{name} must be true or false, got {value!r}")
+        return False
+
+    def number_list(self, name):
+        value = self._raw(name)
+        if value is None:
+            return []
+        try:
+            return [int(part) for part in value.split(",")]
+        except ValueError:
+            self.problems.append(f"{name} must look like 50,80,120,160, got {value!r}")
+            return []
+
+    def text_list(self, name, separator=","):
+        value = self._raw(name)
+        if value is None:
+            return []
+        return [part.strip() for part in value.split(separator) if part.strip()]
+
+    def regex_list(self, name):
+        """Regular expressions separated by ;; and checked right away so a typo is found at startup."""
+        patterns = self.text_list(name, separator=";;")
+        for pattern in patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                self.problems.append(f"{name} has a bad pattern {pattern!r}: {exc}")
+        return patterns
+
+    def file_text(self, name):
+        value = self._raw(name)
+        if value is None:
+            return ""
+        path = PROJECT_ROOT / value
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            self.problems.append(f"{name}: cannot read {path} ({exc.strerror})")
+            return ""
+
+    def services(self, name):
+        text = self.file_text(name)
+        if not text:
+            return []
+        try:
+            services = json.loads(text)
+            seen = set()
+            for service in services:
+                if not isinstance(service["id"], str) or not service["name"] or int(service["duration_minutes"]) < 5:
+                    raise ValueError("every service needs an id, a name and a duration of 5 minutes or more")
+                if service["id"] in seen:
+                    raise ValueError(f"the service id {service['id']!r} appears twice")
+                seen.add(service["id"])
+            if not services:
+                raise ValueError("the list is empty")
+            return services
+        except (ValueError, KeyError, TypeError) as exc:
+            self.problems.append(f"{name}: the services file is not valid ({exc})")
+            return []
+
+
+@dataclass(frozen=True)
+class Settings:
+    # server
+    host: str
+    port: int
+    log_level: str
+
+    # Google Calendar
+    google_calendar_id: str
+    google_calendar_api_token: str  # a secret: never log it, never show it to the model
+    google_calendar_base_url: str
+    calendar_timeout_seconds: float
+    calendar_max_retries: int
+    calendar_cache_seconds: float
+    calendar_keepalive_expiry_seconds: float
+    calendar_warm_interval_seconds: float
+
+    # the business
+    business_name: str
+    business_staff_name: str
+    business_timezone: str
+    business_hours_text: str
+    business_hours: dict
+    business_breaks_text: str
+    business_breaks: list
+    services: list
+    booking_buffer_minutes: int
+    min_notice_minutes: int
+    max_advance_days: int
+    slot_step_minutes: int
+    max_slots_returned: int
+    max_search_days: int
+    cancellation_notice_hours: int
+    booking_ref_digits: int
+    max_verify_failures: int
+    verify_lock_seconds: float
+    write_race_window_seconds: float
+
+    # OpenAI (LLM)
+    openai_api_key: str
+    openai_base_url: str
+    openai_model: str
+    openai_max_output_tokens: int
+    openai_keepalive_expiry_seconds: float
+    openai_warm_interval_seconds: float
+    system_prompt_template: str
+    history_max_messages: int
+    max_tool_rounds: int
+    tool_timeout_seconds: float
+    agent_fallback_reply: str
+
+    # confirmation before any change
+    confirm_words: List[str]
+    refuse_words: List[str]
+    confirm_ttl_seconds: float
+
+    # spoken while a tool works
+    tool_filler_read: List[str]
+    tool_filler_write: List[str]
+    tool_filler_write_delay_seconds: float
+
+    # guardrails
+    input_max_chars: int
+    input_block_patterns: List[str]
+    input_block_reply: str
+    input_too_long_reply: str
+    output_block_reply: str
+    output_unconfirmed_reply: str
+
+    # Deepgram (STT, Flux)
+    deepgram_api_key: str
+    deepgram_ws_url: str
+    deepgram_model: str
+    deepgram_encoding: str
+    deepgram_sample_rate: int
+    deepgram_eot_threshold: float
+    deepgram_eager_eot_threshold: Optional[float]
+    deepgram_eot_timeout_ms: int
+
+    # ElevenLabs (TTS)
+    elevenlabs_api_key: str
+    elevenlabs_ws_base_url: str
+    elevenlabs_voice_id: str
+    elevenlabs_model: str
+    elevenlabs_output_format: str
+    tts_sample_rate: int  # worked out from the output format, e.g. pcm_16000 -> 16000
+    elevenlabs_inactivity_timeout: int
+    elevenlabs_chunk_schedule: List[int]
+    elevenlabs_stability: float
+    elevenlabs_similarity: float
+    elevenlabs_speaker_boost: bool
+    elevenlabs_auto_mode: bool
+    tts_connect_timeout_seconds: float
+    turn_timeout_seconds: float
+
+    # text chunking
+    first_chunk_chars: int
+    chunk_target_chars: int
+    chunk_max_extra_chars: int
+
+    # browser audio
+    mic_chunk_ms: int
+
+    # behaviour
+    barge_in_enabled: bool
+    idle_timeout_seconds: float
+    drain_grace_seconds: float
+
+
+def load_settings():
+    r = _Reader()
+
+    output_format = r.text("ELEVENLABS_OUTPUT_FORMAT")
+    tts_rate = 0
+    if output_format:
+        if output_format.startswith("pcm_") and output_format[4:].isdigit():
+            tts_rate = int(output_format[4:])
+        else:
+            r.problems.append(
+                f"ELEVENLABS_OUTPUT_FORMAT must be a pcm format like pcm_16000, got {output_format!r}"
+            )
+
+    hours_text = r.text("BUSINESS_HOURS")
+    hours = {}
+    if hours_text:
+        try:
+            hours = parse_business_hours(hours_text)
+        except ValueError as exc:
+            r.problems.append(f"BUSINESS_HOURS is not valid: {exc}")
+
+    breaks_text = r.text("BUSINESS_BREAKS")
+    breaks = []
+    if breaks_text:
+        try:
+            breaks = parse_breaks(breaks_text)
+        except ValueError as exc:
+            r.problems.append(f"BUSINESS_BREAKS is not valid: {exc}")
+
+    timezone = r.text("BUSINESS_TIMEZONE")
+    if timezone:
+        try:
+            ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            r.problems.append(f"BUSINESS_TIMEZONE {timezone!r} is not a known time zone (try Asia/Karachi)")
+
+    settings = Settings(
+        host=r.text("HOST"),
+        port=r.integer("PORT"),
+        log_level=r.text("LOG_LEVEL"),
+        google_calendar_id=r.text("GOOGLE_CALENDAR_ID"),
+        google_calendar_api_token=r.text("GOOGLE_CALENDAR_API_TOKEN"),
+        google_calendar_base_url=r.text("GOOGLE_CALENDAR_BASE_URL").rstrip("/"),
+        calendar_timeout_seconds=r.number("CALENDAR_TIMEOUT_SECONDS"),
+        calendar_max_retries=r.integer("CALENDAR_MAX_RETRIES"),
+        calendar_cache_seconds=r.number("CALENDAR_CACHE_SECONDS"),
+        calendar_keepalive_expiry_seconds=r.number("CALENDAR_KEEPALIVE_EXPIRY_SECONDS"),
+        calendar_warm_interval_seconds=r.number("CALENDAR_WARM_INTERVAL_SECONDS"),
+        business_name=r.text("BUSINESS_NAME"),
+        business_staff_name=r.text("BUSINESS_STAFF_NAME"),
+        business_timezone=timezone,
+        business_hours_text=hours_text,
+        business_hours=hours,
+        business_breaks_text=breaks_text,
+        business_breaks=breaks,
+        services=r.services("SERVICES_FILE"),
+        booking_buffer_minutes=r.integer("BOOKING_BUFFER_MINUTES"),
+        min_notice_minutes=r.integer("MIN_NOTICE_MINUTES"),
+        max_advance_days=r.integer("MAX_ADVANCE_DAYS"),
+        slot_step_minutes=r.integer("SLOT_STEP_MINUTES"),
+        max_slots_returned=r.integer("MAX_SLOTS_RETURNED"),
+        max_search_days=r.integer("MAX_SEARCH_DAYS"),
+        cancellation_notice_hours=r.integer("CANCELLATION_NOTICE_HOURS"),
+        booking_ref_digits=r.integer("BOOKING_REF_DIGITS"),
+        max_verify_failures=r.integer("MAX_VERIFY_FAILURES"),
+        verify_lock_seconds=r.number("VERIFY_LOCK_SECONDS"),
+        write_race_window_seconds=r.number("WRITE_RACE_WINDOW_SECONDS"),
+        openai_api_key=r.text("OPENAI_API_KEY"),
+        openai_base_url=r.text("OPENAI_BASE_URL"),
+        openai_model=r.text("OPENAI_MODEL"),
+        openai_max_output_tokens=r.integer("OPENAI_MAX_OUTPUT_TOKENS"),
+        openai_keepalive_expiry_seconds=r.number("OPENAI_KEEPALIVE_EXPIRY_SECONDS"),
+        openai_warm_interval_seconds=r.number("OPENAI_WARM_INTERVAL_SECONDS"),
+        system_prompt_template=r.file_text("SYSTEM_PROMPT_FILE"),
+        history_max_messages=r.integer("HISTORY_MAX_MESSAGES"),
+        max_tool_rounds=r.integer("MAX_TOOL_ROUNDS"),
+        tool_timeout_seconds=r.number("TOOL_TIMEOUT_SECONDS"),
+        agent_fallback_reply=r.text("AGENT_FALLBACK_REPLY"),
+        confirm_words=[word.lower() for word in r.text_list("CONFIRM_WORDS")],
+        refuse_words=[word.lower() for word in r.text_list("REFUSE_WORDS")],
+        confirm_ttl_seconds=r.number("CONFIRM_TTL_SECONDS"),
+        tool_filler_read=r.text_list("TOOL_FILLER_READ", separator="|"),
+        tool_filler_write=r.text_list("TOOL_FILLER_WRITE", separator="|"),
+        tool_filler_write_delay_seconds=r.number("TOOL_FILLER_WRITE_DELAY_SECONDS"),
+        input_max_chars=r.integer("INPUT_MAX_CHARS"),
+        input_block_patterns=r.regex_list("INPUT_BLOCK_PATTERNS"),
+        input_block_reply=r.text("INPUT_BLOCK_REPLY"),
+        input_too_long_reply=r.text("INPUT_TOO_LONG_REPLY"),
+        output_block_reply=r.text("OUTPUT_BLOCK_REPLY"),
+        output_unconfirmed_reply=r.text("OUTPUT_UNCONFIRMED_REPLY"),
+        deepgram_api_key=r.text("DEEPGRAM_API_KEY"),
+        deepgram_ws_url=r.text("DEEPGRAM_WS_URL"),
+        deepgram_model=r.text("DEEPGRAM_MODEL"),
+        deepgram_encoding=r.text("DEEPGRAM_ENCODING"),
+        deepgram_sample_rate=r.integer("DEEPGRAM_SAMPLE_RATE"),
+        deepgram_eot_threshold=r.number("DEEPGRAM_EOT_THRESHOLD"),
+        deepgram_eager_eot_threshold=r.optional_number("DEEPGRAM_EAGER_EOT_THRESHOLD"),
+        deepgram_eot_timeout_ms=r.integer("DEEPGRAM_EOT_TIMEOUT_MS"),
+        elevenlabs_api_key=r.text("ELEVENLABS_API_KEY"),
+        elevenlabs_ws_base_url=r.text("ELEVENLABS_WS_BASE_URL"),
+        elevenlabs_voice_id=r.text("ELEVENLABS_VOICE_ID"),
+        elevenlabs_model=r.text("ELEVENLABS_MODEL"),
+        elevenlabs_output_format=output_format,
+        tts_sample_rate=tts_rate,
+        elevenlabs_inactivity_timeout=r.integer("ELEVENLABS_INACTIVITY_TIMEOUT"),
+        elevenlabs_chunk_schedule=r.number_list("ELEVENLABS_CHUNK_SCHEDULE"),
+        elevenlabs_stability=r.number("ELEVENLABS_STABILITY"),
+        elevenlabs_similarity=r.number("ELEVENLABS_SIMILARITY"),
+        elevenlabs_speaker_boost=r.flag("ELEVENLABS_SPEAKER_BOOST"),
+        elevenlabs_auto_mode=r.flag("ELEVENLABS_AUTO_MODE"),
+        tts_connect_timeout_seconds=r.number("TTS_CONNECT_TIMEOUT_SECONDS"),
+        turn_timeout_seconds=r.number("TURN_TIMEOUT_SECONDS"),
+        first_chunk_chars=r.integer("FIRST_CHUNK_CHARS"),
+        chunk_target_chars=r.integer("CHUNK_TARGET_CHARS"),
+        chunk_max_extra_chars=r.integer("CHUNK_MAX_EXTRA_CHARS"),
+        mic_chunk_ms=r.integer("MIC_CHUNK_MS"),
+        barge_in_enabled=r.flag("BARGE_IN_ENABLED"),
+        idle_timeout_seconds=r.number("IDLE_TIMEOUT_SECONDS"),
+        drain_grace_seconds=r.number("DRAIN_GRACE_SECONDS"),
+    )
+
+    # extra sanity checks, only once every value was read without problems
+    if not r.problems:
+        if any(value < 50 for value in settings.elevenlabs_chunk_schedule):
+            r.problems.append("ELEVENLABS_CHUNK_SCHEDULE values must all be 50 or more (ElevenLabs rejects smaller ones)")
+        if not 20 <= settings.mic_chunk_ms <= 250:
+            r.problems.append("MIC_CHUNK_MS should be between 20 and 250 (80 is recommended for Flux)")
+        if settings.deepgram_eager_eot_threshold is not None:
+            if not 0.3 <= settings.deepgram_eager_eot_threshold <= 0.9:
+                r.problems.append("DEEPGRAM_EAGER_EOT_THRESHOLD must be between 0.3 and 0.9, or empty to switch it off")
+            elif settings.deepgram_eager_eot_threshold > settings.deepgram_eot_threshold:
+                r.problems.append("DEEPGRAM_EAGER_EOT_THRESHOLD must not be higher than DEEPGRAM_EOT_THRESHOLD")
+        if settings.deepgram_encoding != "linear16":
+            r.problems.append("DEEPGRAM_ENCODING must be linear16 (the browser sends 16-bit PCM)")
+        if not 4 <= settings.booking_ref_digits <= 9:
+            r.problems.append("BOOKING_REF_DIGITS must be between 4 and 9")
+        if settings.slot_step_minutes < 5 or settings.max_slots_returned < 1 or settings.max_search_days < 1:
+            r.problems.append("SLOT_STEP_MINUTES must be 5 or more, MAX_SLOTS_RETURNED and MAX_SEARCH_DAYS at least 1")
+        if settings.max_tool_rounds < 1:
+            r.problems.append("MAX_TOOL_ROUNDS must be at least 1")
+
+    if r.problems:
+        raise ConfigError("\n".join(f"  - {problem}" for problem in r.problems))
+    return settings
+
+
+try:
+    settings = load_settings()
+except ConfigError as error:
+    raise SystemExit(f"\nYour .env file has problems:\n{error}\n\nCompare it with .env.example and try again.\n")
