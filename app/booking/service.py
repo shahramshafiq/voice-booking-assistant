@@ -100,7 +100,7 @@ class BookingService:
         )
         self.services = {service["id"]: service for service in settings.services}
         self._clock = clock
-        self._write_lock = asyncio.Lock()  # ponytail: one lock for the one staff member; per-day locks if that ever limits us
+        self._write_lock = asyncio.Lock()  # Limit: one lock for the one staff member; per-day locks if that ever limits us
         self._recent_writes = []  # (start, end, event id, time) of changes this server made a moment ago
         self._failed_lookups = {}  # phone key -> times of wrong reference/phone tries, across all callers
 

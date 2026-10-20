@@ -126,7 +126,7 @@ def parse_clock(text):
     elif suffix == "am" and hour == 12:
         hour = 0
     elif suffix is None and 1 <= hour <= 7:
-        # ponytail: a bare "3" is guessed as 3 PM because nobody books at 3 AM; the model also confirms the time
+        # Guess: a bare "3" is guessed as 3 PM because nobody books at 3 AM; the model also confirms the time
         hour += 12
     return time(hour, minute)
 
