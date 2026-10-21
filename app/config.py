@@ -15,9 +15,12 @@ from dotenv import load_dotenv
 
 from .booking.scheduling import parse_breaks, parse_business_hours
 
-load_dotenv()
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Your own .env wins. Any setting it does not mention falls back to the value in .env.example, so a new
+# setting added to the project never stops the app from starting.
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env.example")
 
 
 class ConfigError(Exception):
