@@ -8,7 +8,7 @@ A voice receptionist that books, looks up, moves and cancels appointments in Goo
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
 ![OpenAI](https://img.shields.io/badge/OpenAI-gpt--4.1--mini-412991?style=flat-square&logo=openai&logoColor=white)
 ![Google Calendar](https://img.shields.io/badge/Google%20Calendar-API%20v3-4285F4?style=flat-square&logo=googlecalendar&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-90%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-112%20passing-brightgreen?style=flat-square)
 
 </div>
 
@@ -21,6 +21,9 @@ You open a web page, press Start and talk. The assistant listens, decides what y
 - **Eight booking tools:** services, business config, calendar availability, slot search, create, look up, reschedule and cancel. All rules (opening hours, breaks, buffers, notice, durations, cancellation policy) live in backend code and `.env`, never in the model.
 - **Confirm before any change:** a booking, move or cancellation happens only after the assistant reads the details back and you say yes in the next turn. The question is written by the code, so what you hear is exactly what gets booked.
 - **Early draft for speed:** the model starts working when Deepgram thinks you are nearly done. Read-only checks and the calendar re-check run early, and the final change waits until you have really finished speaking.
+- **Ready before you press Start:** the page connects to the server and the speech services while it loads, the next weeks of the calendar are kept in memory and refreshed in the background, and the model's prompt is warmed, so Start and searches for free times do not wait for the network. The check right before a change always asks Google again.
+- **Fast confirmations:** a plain yes or no to the confirmation question is handled by the code without asking the model, and the result of a booking, move or cancellation is announced from the real result, so those steps need no extra model call.
+- **No dead air:** the moment a tool starts, a natural sentence for that kind of tool is spoken ("Sure, let me check the calendar.", "Okay, I'm booking that for you now.").
 - **Safe against retries and races:** a repeated request returns the existing booking, a lost reply is checked before reporting failure, a reschedule updates the same calendar event and keeps the original if it fails, and two callers cannot take one slot.
 - **Identity checks:** lookup, reschedule and cancel need the booking reference and the phone number, and wrong tries are limited per call and per phone number.
 - **Input and output guardrails:** the input rail blocks instruction-override attempts and removes card numbers. The output rail stops secrets and instruction leaks, blocks "booked it" claims that no tool confirmed, and stops made-up booking references.
@@ -64,7 +67,7 @@ voice-booking-assistant/
   prompts/               System prompt template
   scripts/               check_calendar.py (free Google Calendar check)
   static/                Web page, audio worklets, styles
-  tests/                 90 tests with fake services
+  tests/                 112 tests with fake services
 ```
 
 ## Getting Started
@@ -92,6 +95,7 @@ Copy `.env.example` to `.env` and fill in:
 - `GOOGLE_CALENDAR_ID` and `GOOGLE_CALENDAR_API_TOKEN`
 - Business rules: `BUSINESS_NAME`, `BUSINESS_STAFF_NAME`, `BUSINESS_TIMEZONE`, `BUSINESS_HOURS`, `BUSINESS_BREAKS`, `BOOKING_BUFFER_MINUTES`, `MIN_NOTICE_MINUTES`, `MAX_ADVANCE_DAYS`, `CANCELLATION_NOTICE_HOURS`
 - Services are listed in `data/services.json`
+- Any setting missing from your `.env` uses the value in `.env.example`
 
 ### Getting a Google Calendar token
 
@@ -135,11 +139,12 @@ The page shows the live transcript, the tools that were used and a latency table
 python -m pytest
 ```
 
-The 90 tests use a fake Google Calendar, fake Deepgram and ElevenLabs connections and a scripted model, so they need no keys and cost nothing. They cover date parsing, slot maths, the booking rules, the confirmation gate, the guardrails and whole conversations.
+The 112 tests use a fake Google Calendar, fake Deepgram and ElevenLabs connections and a scripted model, so they need no keys and cost nothing. They cover date parsing, slot maths, the booking rules, the confirmation gate, the guardrails and whole conversations.
 
 ## Limitations and Roadmap
 
 - The Google token is pasted by hand and expires after about an hour.
+- Searches use calendar data that is at most about 30 seconds old. The final check before any change is always live.
 - One staff member and one calendar. Locks and the race guard work inside one server process.
 - The guardrails are rule based. They catch common attacks but are not a language-model judge.
 - Speech recognition is configured for English and the app runs in the browser only, with no phone line.
