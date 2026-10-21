@@ -70,6 +70,32 @@ def test_text_and_a_tool_request_are_read_in_order():
     assert body["max_output_tokens"] == settings.openai_max_output_tokens
 
 
+def test_priming_sends_the_real_instructions_and_tools_in_a_tiny_request():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx2.Response(200, json=dict(RESPONSE, status="completed"))
+
+    llm = LLMClient(settings)
+    llm.client = AsyncOpenAI(api_key="test", base_url="http://fake/v1",
+                             http_client=DefaultAsyncHttpxClient(transport=httpx2.MockTransport(handler)))
+    asyncio.run(llm.prime("be nice", build_definitions()))
+    body = seen["body"]
+    assert body["instructions"] == "be nice" and len(body["tools"]) == 8
+    assert body["tool_choice"] == "none" and body["max_output_tokens"] == 16 and not body.get("stream")
+
+
+def test_priming_never_raises():
+    def handler(request):
+        return httpx2.Response(500, json={"error": {"message": "boom"}})
+
+    llm = LLMClient(settings)
+    llm.client = AsyncOpenAI(api_key="test", base_url="http://fake/v1", max_retries=0,
+                             http_client=DefaultAsyncHttpxClient(transport=httpx2.MockTransport(handler)))
+    asyncio.run(llm.prime("be nice", build_definitions()))  # only logs a warning
+
+
 def test_the_last_round_forbids_tools():
     llm, seen = make_client([{"type": "response.completed", "response": dict(RESPONSE, status="completed")}])
     asyncio.run(collect(llm, allow_tools=False))

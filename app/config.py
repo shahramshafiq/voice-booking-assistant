@@ -201,6 +201,7 @@ class Settings:
     system_prompt_template: str
     history_max_messages: int
     max_tool_rounds: int
+    openai_prime_on_connect: bool
     tool_timeout_seconds: float
     agent_fallback_reply: str
 
@@ -356,6 +357,7 @@ def load_settings():
         system_prompt_template=r.file_text("SYSTEM_PROMPT_FILE"),
         history_max_messages=r.integer("HISTORY_MAX_MESSAGES"),
         max_tool_rounds=r.integer("MAX_TOOL_ROUNDS"),
+        openai_prime_on_connect=r.flag("OPENAI_PRIME_ON_CONNECT"),
         tool_timeout_seconds=r.number("TOOL_TIMEOUT_SECONDS"),
         agent_fallback_reply=r.text("AGENT_FALLBACK_REPLY"),
         confirm_words=[word.lower() for word in r.text_list("CONFIRM_WORDS")],

@@ -56,6 +56,23 @@ class LLMClient:
                 log.warning("warm-up ping failed: %s", type(exc).__name__)
             await asyncio.sleep(self.settings.openai_warm_interval_seconds)
 
+    async def prime(self, instructions, tools):
+        """Send one tiny request that carries the real instructions and tool list. OpenAI keeps the start of a
+        long, unchanging prompt ready for a few minutes, so the first real question starts sooner."""
+        started_at = time.perf_counter()
+        try:
+            await self.client.responses.create(
+                model=self.settings.openai_model,
+                instructions=instructions,
+                input=[{"role": "user", "content": "Hello"}],
+                tools=tools,
+                tool_choice="none",
+                max_output_tokens=16,
+            )
+            log.info("prompt primed in %.0f ms", (time.perf_counter() - started_at) * 1000)
+        except Exception as exc:
+            log.warning("could not prime the prompt: %s", type(exc).__name__)
+
     # ---------------------------------------------------------------- the actual reply
     async def stream(self, instructions, input_items, tools, allow_tools=True):
         """Yield LLMEvents as OpenAI writes the answer.
