@@ -8,6 +8,7 @@ import base64
 import json
 import logging
 import time
+import uuid
 from contextlib import suppress
 from urllib.parse import urlencode
 
@@ -102,6 +103,30 @@ class ElevenLabsSession:
             raise
 
         return {"new_connection": newly_connected, "connection_ms": connection_ms}
+
+    async def check_voice(self, text="Hi."):
+        """Speak one tiny word and throw the sound away. Returns how many bytes of audio came back.
+
+        0 means the voice is not working. When the account is out of credits ElevenLabs does not send an error:
+        it simply answers every text with "no audio, finished".
+        """
+        total = 0
+
+        async def count(audio):
+            nonlocal total
+            total += len(audio)
+
+        async def nothing():
+            pass
+
+        context_id = f"check-{uuid.uuid4()}"
+        await self.start_context(context_id, on_audio=count, on_first_audio=nothing)
+        await self.send_text(context_id, text + " ", flush=True)
+        try:
+            await asyncio.wait_for(self.finish_context(context_id), self.settings.tts_check_timeout_seconds)
+        except asyncio.TimeoutError:
+            log.warning("the voice check timed out after %.0f s", self.settings.tts_check_timeout_seconds)
+        return total
 
     async def send_text(self, context_id, text, flush=False):
         websocket = self.websocket
