@@ -17,6 +17,7 @@ class FakeGoogleCalendar:
         self.token = token
         self.events = {}  # id -> event dict
         self.requests = []  # (method, path) of every request, to count calls
+        self.queries = []  # the query parameters of every request
         self.fail_next = []  # list of (status, lose_answer) to inject, used one per request
         self.fail_always = {}  # HTTP method -> status that every request of that kind gets
         self._ids = count(1)
@@ -34,6 +35,7 @@ class FakeGoogleCalendar:
     def _handle(self, request):
         path = unquote(request.url.path)
         self.requests.append((request.method, path))
+        self.queries.append(dict(request.url.params))
         if request.headers.get("authorization") != f"Bearer {self.token}":
             return httpx.Response(401, json={"error": {"code": 401, "errors": [{"reason": "authError"}]}})
         if request.method in self.fail_always:  # e.g. {"PATCH": 500}: every update fails

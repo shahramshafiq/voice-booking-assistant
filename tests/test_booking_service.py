@@ -235,6 +235,18 @@ def test_expired_token_is_a_clear_error_not_a_false_success():
     assert fake.events == {}
 
 
+def test_changes_ask_google_for_a_short_reply_and_send_no_notifications():
+    fake, service = make()
+    slot = first_slot(service)
+    ref = book(service, slot)["booking_reference"]
+    run(service.reschedule_booking(RescheduleArgs(booking_reference=ref, customer_phone=PHONE, new_date="tomorrow", new_time="11:00")))
+    run(service.cancel_booking(BookingLookupArgs(booking_reference=ref, customer_phone=PHONE)))
+    changes = [(method, query) for (method, _), query in zip(fake.requests, fake.queries) if method in ("POST", "PATCH", "DELETE")]
+    assert [m for m, _ in changes] == ["POST", "PATCH", "DELETE"]
+    assert all(q.get("sendUpdates") == "none" for _, q in changes)
+    assert all(q.get("fields") == "id" for m, q in changes if m != "DELETE")
+
+
 def test_a_short_calendar_hiccup_is_retried_and_a_long_one_is_reported():
     fake, service = make()
     fake.fail_next = [(503, False)]

@@ -17,6 +17,9 @@ log = logging.getLogger("calendar")
 # Only ask Google for the fields we use: smaller answers arrive faster.
 EVENT_FIELDS = "nextPageToken,items(id,status,transparency,start,end,extendedProperties/private)"
 
+# For changes we only need the event id back, and nobody has to be notified (the events have no guests).
+CHANGE_PARAMS = [("fields", "id"), ("sendUpdates", "none")]
+
 
 class CalendarError(Exception):
     code = "CALENDAR_ERROR"
@@ -144,18 +147,18 @@ class CalendarClient:
     async def insert_event(self, body):
         # Not retried automatically: a retry after a timeout could create the event twice.
         # The booking service checks whether it was created before it reports a failure.
-        event = await self._request("POST", self.calendar_path, body=body, retry=False)
+        event = await self._request("POST", self.calendar_path, params=CHANGE_PARAMS, body=body, retry=False)
         self._cache.clear()
         return event
 
     async def patch_event(self, event_id, body):
-        event = await self._request("PATCH", f"{self.calendar_path}/{quote(event_id, safe='')}", body=body)
+        event = await self._request("PATCH", f"{self.calendar_path}/{quote(event_id, safe='')}", params=CHANGE_PARAMS, body=body)
         self._cache.clear()
         return event
 
     async def delete_event(self, event_id):
         try:
-            await self._request("DELETE", f"{self.calendar_path}/{quote(event_id, safe='')}")
+            await self._request("DELETE", f"{self.calendar_path}/{quote(event_id, safe='')}", params=[("sendUpdates", "none")])
         except CalendarNotFound:
             pass  # already gone: the goal (no such appointment) is reached
         self._cache.clear()
