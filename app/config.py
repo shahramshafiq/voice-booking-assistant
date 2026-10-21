@@ -251,6 +251,7 @@ class Settings:
     barge_in_enabled: bool
     idle_timeout_seconds: float
     drain_grace_seconds: float
+    slow_event_warning_ms: float
 
 
 def load_settings():
@@ -372,6 +373,7 @@ def load_settings():
         barge_in_enabled=r.flag("BARGE_IN_ENABLED"),
         idle_timeout_seconds=r.number("IDLE_TIMEOUT_SECONDS"),
         drain_grace_seconds=r.number("DRAIN_GRACE_SECONDS"),
+        slow_event_warning_ms=r.number("SLOW_EVENT_WARNING_MS"),
     )
 
     # extra sanity checks, only once every value was read without problems

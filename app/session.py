@@ -256,8 +256,11 @@ class VoiceSession:
 
     # ================================================================ Deepgram events
     async def _on_stt_event(self, event):
+        started = time.perf_counter()
         kind = event.get("type")
-        if kind == "TurnInfo":
+        if kind == "TurnInfo" and event.get("event") == "Update":
+            await self._show_live_text(event)  # never waits for the lock: your words appear at once
+        elif kind == "TurnInfo":
             async with self._lock:
                 await self._handle_turn_info(event)
         elif kind == "Connected":
@@ -267,6 +270,15 @@ class VoiceSession:
             await self.send_event({"type": "error", "message": f"Deepgram: {event}"})
         else:
             log.debug("Deepgram message: %s", kind)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        if elapsed_ms > self.settings.slow_event_warning_ms:
+            log.warning("slow Deepgram event %s/%s: %.0f ms to handle (waiting for the lock or for the browser)",
+                        kind, event.get("event"), elapsed_ms)
+
+    async def _show_live_text(self, event):
+        transcript = (event.get("transcript") or "").strip()
+        if transcript and not self._ignore_user_turn:
+            await self.send_event({"type": "transcript_interim", "text": transcript})
 
     async def _handle_turn_info(self, event):
         name = event.get("event")
@@ -283,10 +295,6 @@ class VoiceSession:
                     self._ignore_user_turn = True
             elif self.draft is not None:
                 await self._cancel_draft_nolock()
-
-        elif name == "Update":
-            if transcript and not self._ignore_user_turn:
-                await self.send_event({"type": "transcript_interim", "text": transcript})
 
         elif name == "EagerEndOfTurn":
             can_draft = self.settings.deepgram_eager_eot_threshold is not None
@@ -327,10 +335,16 @@ class VoiceSession:
         turn.start().add_done_callback(lambda task, t=turn: self._spawn(self._on_turn_done(t, task)))
         return turn
 
+    def _discard(self, turn):
+        """Stop a turn without making anybody wait for its clean-up. Closing the model's HTTP stream can take a
+        while, and everything Deepgram tells us waits behind the same lock."""
+        turn.stop()
+        self._spawn(turn.cancel())
+
     async def _cancel_draft_nolock(self):
         if self.draft is not None:
             draft, self.draft = self.draft, None
-            await draft.cancel()
+            self._discard(draft)
 
     async def _on_end_of_turn(self, event, transcript):
         self.last_activity = time.monotonic()
@@ -457,7 +471,7 @@ class VoiceSession:
         log.info("barge-in on turn %d (played %d ms)", turn.turn_id, self.played_ms)
 
         await self.send_event({"type": "clear"})  # 1. silence the speakers first
-        await turn.cancel()  # 2. stop the model, the tools that only read, and the TTS
+        self._discard(turn)  # 2. stop the model, the tools that only read, and the TTS (clean-up runs in the background)
         self._cancel_drain_watchdog()
 
         heard = turn.heard_text(self.played_ms)  # 3. remember only what was actually heard

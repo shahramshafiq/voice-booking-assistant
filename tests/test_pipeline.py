@@ -332,6 +332,64 @@ def test_a_discarded_draft_changes_nothing(monkeypatch):
     run(scenario())
 
 
+class SlowCloseLLM(ScriptedLLM):
+    """Like a real HTTP stream: it waits for more words, and closing it in the middle takes a while."""
+
+    async def stream(self, instructions, input_items, tools, allow_tools=True):
+        try:
+            async for event in super().stream(instructions, input_items, tools, allow_tools):
+                yield event
+                await asyncio.sleep(10)
+        finally:
+            await asyncio.sleep(0.6)  # the slow close
+
+
+def test_live_text_is_not_delayed_by_a_slow_draft_cancellation(monkeypatch):
+    llm = SlowCloseLLM([text("A long answer that is still being written.")])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        turn = lambda kind, words: {"type": "TurnInfo", "event": kind, "transcript": words, "words": [{"end": 4.0}]}
+        await bench.session._on_stt_event(turn("StartOfTurn", "I would like"))
+        await bench.session._on_stt_event(turn("EagerEndOfTurn", "I would like to book"))
+        await asyncio.sleep(0.3)  # the early draft is running
+        started = time.monotonic()
+        resumed = asyncio.create_task(bench.session._on_stt_event(turn("TurnResumed", "I would like to book")))
+        await asyncio.sleep(0.01)
+        await bench.session._on_stt_event(turn("Update", "I would like to book a consultation"))
+        assert time.monotonic() - started < 0.25  # the live words did not wait for the draft to be cleaned up
+        assert bench.socket.of_type("transcript_interim")[-1]["text"] == "I would like to book a consultation"
+        await resumed
+        assert time.monotonic() - started < 0.4  # and the cancellation itself did not block the conversation
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_barge_in_does_not_wait_for_the_clean_up_and_late_audio_is_dropped(monkeypatch):
+    llm = SlowCloseLLM([text("We offer a consultation, a follow up and an extended consultation. Which one?")])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        turn = lambda kind, words: {"type": "TurnInfo", "event": kind, "transcript": words, "words": [{"end": 4.0}]}
+        await bench.session._on_stt_event(turn("StartOfTurn", "what do you offer"))
+        await bench.session._on_stt_event(turn("EndOfTurn", "what do you offer"))
+        await asyncio.sleep(0.2)
+        started = time.monotonic()
+        await bench.session._on_stt_event(turn("StartOfTurn", "stop"))  # barge-in
+        assert time.monotonic() - started < 0.3
+        assert bench.socket.of_type("interrupted")
+        sent_before = len(bench.socket.audio)
+        late_turn = bench.session.turn or None
+        await asyncio.sleep(0.8)  # the clean-up finishes in the background
+        assert len(bench.socket.audio) == sent_before  # nothing more reached the speakers
+        await bench.stop()
+
+    run(scenario())
+
+
 def test_a_filler_covers_a_slow_tool_and_the_pause_is_primed(monkeypatch):
     slots_call = tool("find_available_slots", service_id="consultation", date_range={"start_date": "tomorrow"})
     llm = ScriptedLLM([slots_call], [text("I have nine tomorrow. Shall I book it?")])

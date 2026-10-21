@@ -40,6 +40,7 @@ class Turn:
         self.gate = asyncio.Event()  # opened by commit(); a draft waits here
         self.ctx = ToolContext(gate=self.gate, user_text=user_text, emit=send_event)
         self.task = None
+        self.cancelled = False  # set the moment the reply is stopped, so late audio is dropped
         self.draft_hit = False  # True if the early (draft) answer was the one we used
         self.eot_lag_ms = None
 
@@ -69,9 +70,16 @@ class Turn:
         self.timer.mark("committed")
         self.gate.set()
 
-    async def cancel(self):
+    def stop(self):
+        """Ask the reply to stop right now. Returns at once; the clean-up (closing the model's stream, closing
+        the voice context) finishes in the background."""
+        self.cancelled = True
         if self.task is not None and not self.task.done():
             self.task.cancel()
+
+    async def cancel(self):
+        """Stop the reply and wait until its clean-up is finished."""
+        self.stop()
         if self.task is not None:
             with suppress(asyncio.CancelledError, Exception):
                 await self.task
@@ -260,6 +268,8 @@ class Turn:
         await self.on_speaking(self)
 
     async def _on_audio(self, audio_bytes):
+        if self.cancelled:
+            return  # audio that arrives after an interruption must never reach the speakers
         self.audio_bytes += len(audio_bytes)
         self.timer.mark("audio_to_browser")
         await self.send_audio(audio_bytes)
