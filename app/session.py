@@ -67,6 +67,7 @@ class VoiceSession:
 
         self._ignore_user_turn = False  # barge-in off: ignore speech that started while the bot talked
         self._quick_end = False  # True while Deepgram uses the quicker settings for a yes/no answer
+        self._eot_threshold_now = settings.deepgram_eot_threshold  # what Deepgram last confirmed
         self._backchannel = False  # the caller said only "yeah"/"okay" while the assistant talked: not interrupting (yet)
         self._send_lock = asyncio.Lock()  # one message at a time to the browser
         self._lock = asyncio.Lock()  # one state change at a time
@@ -280,6 +281,7 @@ class VoiceSession:
                     await self.stt.close()
                 self.stt = DeepgramFluxStream(self.settings, self._on_stt_event, self._on_stt_closed)
                 self._quick_end = False  # a new connection starts with the normal settings
+                self._eot_threshold_now = self.settings.deepgram_eot_threshold
                 jobs.append(self.stt.connect())
             else:
                 jobs.append(self._nothing())
@@ -404,6 +406,7 @@ class VoiceSession:
             log.info("Deepgram connected")
         elif kind == "ConfigureSuccess":
             log.info("Deepgram turn settings now: %s", event.get("thresholds"))
+            self._eot_threshold_now = (event.get("thresholds") or {}).get("eot_threshold", self._eot_threshold_now)
         elif kind == "ConfigureFailure":
             log.warning("Deepgram refused the new turn settings, the old ones stay: %s", event)
         elif kind and "error" in kind.lower():
@@ -564,8 +567,7 @@ class VoiceSession:
         sure = event.get("end_of_turn_confidence")
         if not isinstance(sure, (int, float)):
             return "unknown"
-        threshold = self.settings.deepgram_confirm_eot_threshold if self._quick_end else self.settings.deepgram_eot_threshold
-        if sure < threshold:
+        if sure < self._eot_threshold_now:  # the value Deepgram itself confirmed (a change can arrive late)
             return f"{sure:.2f}, below the threshold: probably the silence timeout"
         return f"{sure:.2f}"
 
