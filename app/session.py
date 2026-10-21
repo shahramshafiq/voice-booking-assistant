@@ -67,6 +67,7 @@ class VoiceSession:
 
         self._ignore_user_turn = False  # barge-in off: ignore speech that started while the bot talked
         self._quick_end = False  # True while Deepgram uses the quicker settings for a yes/no answer
+        self._backchannel = False  # the caller said only "yeah"/"okay" while the assistant talked: not interrupting (yet)
         self._send_lock = asyncio.Lock()  # one message at a time to the browser
         self._lock = asyncio.Lock()  # one state change at a time
         self._drain_task = None
@@ -307,6 +308,7 @@ class VoiceSession:
             self._cancel_drain_watchdog()
             self.awaiting_drain = False
             self._ignore_user_turn = False
+            self._backchannel = False
             if self.stt is not None:
                 await self.stt.close()
                 self.stt = None
@@ -389,6 +391,12 @@ class VoiceSession:
         kind = event.get("type")
         if kind == "TurnInfo" and event.get("event") == "Update":
             await self._show_live_text(event)  # never waits for the lock: your words appear at once
+            words = (event.get("transcript") or "").strip()
+            if self._backchannel and words and not self._is_backchannel(words):
+                async with self._lock:  # the "yeah" turned into a real request: interrupt after all
+                    if self._backchannel and self.turn is not None:
+                        self._backchannel = False
+                        await self._interrupt_nolock()
         elif kind == "TurnInfo":
             async with self._lock:
                 await self._handle_turn_info(event)
@@ -424,11 +432,15 @@ class VoiceSession:
             self.last_activity = time.monotonic()
             await self.send_event({"type": "user_speaking"})
             if self.turn is not None:
-                if self.settings.barge_in_enabled:
-                    await self._interrupt_nolock()
-                else:
+                if not self.settings.barge_in_enabled:
                     log.info("barge-in is off: ignoring speech while the assistant talks")
                     self._ignore_user_turn = True
+                elif self._is_backchannel(transcript) and not self._asks_to_confirm(self.turn):
+                    # "yeah", "okay", "go ahead" while the assistant talks is agreement, not a new request
+                    log.info("%r while the assistant talks: not interrupting for that", transcript)
+                    self._backchannel = True
+                else:
+                    await self._interrupt_nolock()
             elif self.draft is not None:
                 await self._cancel_draft_nolock()
 
@@ -489,6 +501,13 @@ class VoiceSession:
             self._ignore_user_turn = False
             log.info("ignored a user turn that started while the assistant was talking")
             return
+        if self._backchannel:
+            self._backchannel = False
+            if self.turn is not None and self._is_backchannel(transcript):
+                log.info("ignored %r: said while the assistant was still talking", transcript)
+                await self._cancel_draft_nolock()
+                return
+            # the assistant has finished meanwhile (or it became a real request): handle it like any other turn
         if not transcript:
             await self._cancel_draft_nolock()
             return
@@ -528,6 +547,17 @@ class VoiceSession:
 
         await self.send_event({"type": "transcript_final", "text": shown_text})
         await self._set_state("thinking")
+
+    def _is_backchannel(self, text):
+        """Only agreeing noises: "Yeah.", "Okay, sure.", "Mm-hm", "Yes, go ahead", "Thank you"."""
+        words = re.findall(r"[a-z']+", text.lower().replace("’", "'"))
+        allowed = self.settings.backchannel_words
+        return 0 < len(words) <= self.settings.backchannel_max_words and all(word in allowed for word in words)
+
+    def _asks_to_confirm(self, turn):
+        """Is this reply the confirmation question? Then a "yes" spoken over it is the real answer."""
+        pending = self.memory.pending
+        return pending is not None and pending.turn_no == turn.turn_id
 
     def _how_sure(self, event):
         """Deepgram's confidence that the caller had finished. Below the threshold means it gave up waiting instead."""

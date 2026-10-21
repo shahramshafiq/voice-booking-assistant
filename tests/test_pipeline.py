@@ -504,6 +504,40 @@ def test_a_transcript_with_no_words_is_ignored(monkeypatch):
     run(scenario())
 
 
+def test_a_yeah_while_the_assistant_talks_does_not_cut_it_off(monkeypatch):
+    llm = ScriptedLLM([text("We offer a consultation, a follow-up and an extended consultation.")],
+                      [text("Sure, what would you like to change?")])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        session = bench.session
+        ask = {"type": "TurnInfo", "transcript": "What services do you offer?", "words": [{"end": 4.0}]}
+        await session._on_stt_event({"event": "StartOfTurn", **ask})
+        await session._on_stt_event({"event": "EndOfTurn", **ask})
+        for _ in range(100):
+            if session.awaiting_drain:
+                break
+            await asyncio.sleep(0.01)
+        talking = session.turn
+        assert talking is not None  # all sound is made, the speakers are still playing it
+
+        yeah = {"type": "TurnInfo", "transcript": "Yeah. Sure. Go ahead.", "words": [{"end": 6.0}]}
+        await session._on_stt_event({"event": "StartOfTurn", **yeah})
+        await session._on_stt_event({"event": "EndOfTurn", **yeah})
+        assert session.turn is talking and not bench.socket.of_type("clear")  # still talking, nothing was cut off
+        assert session.memory.turn_no == 1 and len(llm.calls) == 1  # and the "yeah" did not start a new answer
+
+        # but a "yeah" that turns into a real request does interrupt
+        await session._on_stt_event({"event": "StartOfTurn", "type": "TurnInfo", "transcript": "Yeah", "words": []})
+        assert not bench.socket.of_type("clear")
+        await session._on_stt_event({"event": "Update", "type": "TurnInfo", "transcript": "Yeah, but wait", "words": []})
+        assert bench.socket.of_type("clear") and session.turn is None
+        await bench.stop()
+
+    run(scenario())
+
+
 def test_a_short_okay_is_said_when_the_caller_went_quiet_but_deepgram_is_still_busy(monkeypatch):
     loud = array("h", [3000, -3000] * 640).tobytes()  # 80 ms of speech
     quiet = bytes(2560)  # 80 ms of silence

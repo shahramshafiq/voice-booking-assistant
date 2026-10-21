@@ -284,6 +284,8 @@ class Settings:
     local_speech_rms: float
 
     # behaviour
+    backchannel_words: frozenset  # "yeah", "okay"... said while the assistant talks: no interruption
+    backchannel_max_words: int
     barge_in_enabled: bool
     idle_timeout_seconds: float
     drain_grace_seconds: float
@@ -433,6 +435,8 @@ def load_settings():
         listen_ack_silence_ms=r.number("LISTEN_ACK_SILENCE_MS"),
         listen_ack_min_speech_ms=r.number("LISTEN_ACK_MIN_SPEECH_MS"),
         local_speech_rms=r.number("LOCAL_SPEECH_RMS"),
+        backchannel_words=frozenset(word.lower() for word in r.optional_list("BACKCHANNEL_WORDS", separator=",")),
+        backchannel_max_words=r.integer("BACKCHANNEL_MAX_WORDS"),
         barge_in_enabled=r.flag("BARGE_IN_ENABLED"),
         idle_timeout_seconds=r.number("IDLE_TIMEOUT_SECONDS"),
         drain_grace_seconds=r.number("DRAIN_GRACE_SECONDS"),
