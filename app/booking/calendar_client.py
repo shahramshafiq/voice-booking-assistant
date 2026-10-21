@@ -75,7 +75,10 @@ class CalendarClient:
             except httpx.TransportError as exc:
                 last_error = CalendarUnavailable(f"Could not reach Google Calendar ({type(exc).__name__}).")
             else:
-                log.info("calendar %s -> %d (%.0f ms)", method, response.status_code, (time.perf_counter() - started) * 1000)
+                took_ms = (time.perf_counter() - started) * 1000
+                # reads happen every few seconds in the background: only mention them when they are slow
+                level = logging.INFO if method != "GET" else (logging.WARNING if took_ms > 1500 else logging.DEBUG)
+                log.log(level, "calendar %s -> %d (%.0f ms)", method, response.status_code, took_ms)
                 if response.status_code < 300:
                     return response.json() if response.content else {}
                 last_error = self._error_for(response)
