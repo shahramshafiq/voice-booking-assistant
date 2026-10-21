@@ -159,7 +159,9 @@ class Turn:
             await self.tts.finish_context(self._context_id)
             self._context_open = False
             self.finished = True
-            log.info("turn %s: all audio generated", self.turn_id)
+            await self._report_if_the_voice_was_silent()
+            log.info("turn %s: all audio generated (%.1f s of sound for %d characters)", self.turn_id, self.audio_ms / 1000,
+                     sum(len(chunk) for chunk in self.sent_chunks))
 
         finally:
             producer.cancel()
@@ -168,6 +170,15 @@ class Turn:
             if self._context_open and not self.finished:
                 with suppress(Exception):
                     await self.tts.cancel_context(self._context_id)
+
+    async def _report_if_the_voice_was_silent(self):
+        """The voice service can answer "finished" without any sound (for example when the account is out of
+        credits). The reply text is still on the page; tell the user why they could not hear it."""
+        characters = sum(len(chunk.strip()) for chunk in self.sent_chunks)
+        if characters and self.audio_ms < characters * self.settings.tts_min_ms_per_character:
+            log.error("turn %s: the voice returned %.1f s of sound for %d characters; the account may be out of credits",
+                      self.turn_id, self.audio_ms / 1000, characters)
+            await self.send_event({"type": "warning", "message": self.settings.no_audio_warning})
 
     async def _produce(self, queue):
         """Runs in the background: put everything the assistant wants to say on the queue."""
