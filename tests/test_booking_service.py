@@ -65,6 +65,9 @@ def test_slots_respect_hours_breaks_and_existing_events():
     assert "14:00" not in starts and "13:30" not in starts and "14:30" not in starts and "15:00" not in starts
     assert "15:30" in starts or "16:00" in starts
     assert all(s["label"].startswith("tomorrow at") for s in result["slots"])
+    assert "requested_time_free" not in result  # no exact time was asked for
+    assert run(service.find_available_slots(slot_args(pref="11 AM")))["requested_time_free"] is True
+    assert run(service.find_available_slots(slot_args(pref="2 PM")))["requested_time_free"] is False  # taken
 
 
 def test_low_level_availability_tool():

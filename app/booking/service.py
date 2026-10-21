@@ -260,6 +260,9 @@ class BookingService:
             raise BookingError("INVALID_INPUT", str(exc))
         result = await self._search(first, last, service["duration_minutes"], pref, self._notice(service))
         result["service"] = {"id": service["id"], "name": service["name"], "duration_minutes": service["duration_minutes"]}
+        if pref is not None and pref.target is not None:
+            # say it plainly: the model once told a caller that 11 AM was taken while 11 AM was in this very list
+            result["requested_time_free"] = any(datetime.fromisoformat(s["start"]).time() == pref.target for s in result["slots"])
         return result
 
     async def _unavailable(self, problem, start, duration, notice, events, exclude_id=None):
