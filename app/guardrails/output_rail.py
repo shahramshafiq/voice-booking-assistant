@@ -47,7 +47,7 @@ CLAIMS = [
 ]
 
 # A leak repeats the instructions word for word, so this many words in a row from the rules counts as one.
-# Fewer words catch normal replies too ("I can only help with appointments with Ayesha Khan" shares 7 with the rules).
+# Fewer words catch normal replies too ("I can only help with appointments with Shahram Shafiq" shares 7 with the rules).
 LEAK_WORDS = 10
 
 REFERENCE_MENTION = re.compile(r"\b(?:reference|ref)\b[^0-9]{0,25}(\d(?:[ ,.-]{0,2}\d)*)", re.IGNORECASE)
