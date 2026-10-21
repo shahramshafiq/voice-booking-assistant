@@ -458,6 +458,21 @@ def test_a_discarded_draft_changes_nothing(monkeypatch):
     run(scenario())
 
 
+def test_a_transcript_with_no_words_is_ignored(monkeypatch):
+    llm = ScriptedLLM()  # the model must not be asked anything
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        await bench.say(".")  # Deepgram sometimes writes down a noise as a full stop
+        await bench.say("...", draft=False)
+        assert llm.calls == [] and bench.session.draft is None and bench.session.turn is None
+        assert bench.session.memory.turn_no == 0 and bench.session.state == "listening"
+        await bench.stop()
+
+    run(scenario())
+
+
 class SlowCloseLLM(ScriptedLLM):
     """Like a real HTTP stream: it waits for more words, and closing it in the middle takes a while."""
 

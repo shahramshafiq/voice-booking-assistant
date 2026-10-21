@@ -362,6 +362,9 @@ class VoiceSession:
     async def _handle_turn_info(self, event):
         name = event.get("event")
         transcript = (event.get("transcript") or "").strip()
+        if transcript and name in ("EagerEndOfTurn", "EndOfTurn") and not re.search(r"[^\W_]", transcript):
+            log.info("ignored %s with no words in it: %r", name, transcript)  # for example "." from a noise
+            transcript = ""
 
         if name == "StartOfTurn":
             self.last_activity = time.monotonic()
