@@ -76,6 +76,8 @@ class VoiceSession:
         self._calendar_warning = None  # the text shown in the browser for it
         self._warmed_at = None  # when the calendar window was last refreshed
         self._primed = False  # the model's prompt is primed once per page
+        self._voice_checked = False  # the voice is tested once per page
+        self._voice_warning = None  # set when the voice returned no sound
 
     # ================================================================ sending to the browser
     async def send_event(self, event):
@@ -177,6 +179,8 @@ class VoiceSession:
         # a calendar problem does not stop the call: the assistant tells the caller honestly instead
         if self._calendar_warning:
             await self.send_event({"type": "warning", "message": self._calendar_warning})
+        if self._voice_warning:
+            await self.send_event({"type": "warning", "message": self._voice_warning})
 
         self.last_activity = time.monotonic()
         self.stt.bytes_sent = 0
@@ -196,9 +200,26 @@ class VoiceSession:
         except Exception:
             log.exception("could not prepare the connections; they will be opened at Start")
             return
+        if self.settings.tts_check_on_connect and not self._voice_checked:
+            self._voice_checked = True
+            await self._check_voice()
         if self.settings.openai_prime_on_connect and not self._primed:
             self._primed = True
             await self.llm.prime(self.instructions, self.runner.definitions)
+
+    async def _check_voice(self):
+        """Speak one tiny word and discard it. Finds an empty ElevenLabs account before anybody talks to the assistant."""
+        try:
+            produced = await self.tts.check_voice()
+        except Exception as exc:
+            log.warning("could not test the voice: %s: %s", type(exc).__name__, exc)
+            return
+        if produced == 0:
+            log.error("VOICE PROBLEM: the voice returned no sound at all; the account may be out of credits")
+            self._voice_warning = self.settings.no_audio_warning
+            await self.send_event({"type": "warning", "message": self._voice_warning})
+        else:
+            log.info("voice check passed (%.1f s of sound)", produced / (self.settings.tts_sample_rate * 2))
 
     async def _connect_all(self):
         """Open whatever is not open yet; anything already open is kept. Returns [ears, voice, calendar] results."""
