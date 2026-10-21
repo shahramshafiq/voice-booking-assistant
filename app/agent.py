@@ -10,6 +10,7 @@ The Turn (turn.py) turns these into speech.
 import asyncio
 import logging
 
+from .booking.speech import digit_runs
 from .tools import for_model
 
 log = logging.getLogger("agent")
@@ -48,6 +49,13 @@ async def run_agent(*, llm, runner, memory, ctx, settings, instructions, history
         # the stable part (history) first, the changing part (state, question, tool results) last
         state = memory.render_state(runner.service.now(), settings.business_timezone)
         return [*history, {"role": "system", "content": state}, {"role": "user", "content": user_text}, *notes, *tool_items]
+
+    for reference in digit_runs(user_text):
+        if len(reference) == settings.booking_ref_digits and reference not in memory.known_refs:
+            # the model once answered "I could not find it" from memory for a new reference without looking it up
+            notes.append({"role": "system", "content": f"The caller has just given the booking reference {reference}. "
+                          "Call get_booking with exactly this reference now, with the phone number the caller gave, "
+                          "even if earlier lookups failed. Do not answer from memory."})
 
     try:
         # A plain "yes" or "no" to the confirmation question needs no model at all.

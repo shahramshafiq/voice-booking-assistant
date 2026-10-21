@@ -7,6 +7,25 @@ GROUPED_DIGITS = r"(?:\d \d \d, )+\d(?: \d){0,2}"  # 0 3 0, 0 1 2, 3 4 5, 6 7  (
 SPACED_DIGITS = r"\d(?: \d){3,}"  # 5 5 0 7 8 1  (what the assistant itself may write)
 SPOKEN_NUMBER = re.compile(rf"(?<!\d)(?:{GROUPED_DIGITS}|{SPACED_DIGITS})(?!\d)")
 
+# speech recognition writes the digits a caller says as words ("nine seven three")
+DIGIT_WORDS = {"zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+               "six": "6", "seven": "7", "eight": "8", "nine": "9"}
+
+
+def digit_runs(text):
+    """Every run of digits the caller said, written as digits or as words:
+    'reference nine seven three, nine five one and my number is 0300 1234567' -> ['973951', '03001234567']."""
+    runs, current = [], ""
+    for token in re.findall(r"[a-z]+|\d", text.lower()):
+        digit = token if token.isdigit() else DIGIT_WORDS.get(token)
+        if digit is None:
+            if current:
+                runs.append(current)
+            current = ""
+        else:
+            current += digit
+    return runs + [current] if current else runs
+
 
 def say_time(moment):
     """15:00 -> '3 PM', 15:30 -> '3:30 PM'."""

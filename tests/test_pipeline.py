@@ -504,6 +504,24 @@ def test_a_transcript_with_no_words_is_ignored(monkeypatch):
     run(scenario())
 
 
+def test_a_new_booking_reference_is_always_looked_up(monkeypatch):
+    llm = ScriptedLLM([text("Let me look.")], [text("Let me look again.")])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        await bench.say("The same with three three three, three three three.")
+        notes = [i["content"] for i in llm.calls[0]["input"] if i.get("role") == "system"]
+        assert any("booking reference 333333" in note and "get_booking" in note for note in notes)
+        bench.session.memory.known_refs.add("333333")  # it has been looked up now
+        await bench.say("And three three three, three three three again?")
+        notes = [i["content"] for i in llm.calls[1]["input"] if i.get("role") == "system"]
+        assert not any("booking reference" in note for note in notes)  # only a NEW reference gets the reminder
+        await bench.stop()
+
+    run(scenario())
+
+
 def test_a_yeah_while_the_assistant_talks_does_not_cut_it_off(monkeypatch):
     llm = ScriptedLLM([text("We offer a consultation, a follow-up and an extended consultation.")],
                       [text("Sure, what would you like to change?")])

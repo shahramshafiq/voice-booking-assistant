@@ -2,7 +2,14 @@
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
-from app.booking.speech import say_day, say_slot, say_time, spell_digits, tidy_numbers
+from app.booking.speech import digit_runs, say_day, say_slot, say_time, spell_digits, tidy_numbers
+
+
+def test_digits_said_as_words_are_found():
+    said = "The reference is nine seven three, nine five one, and my number is zero three zero zero 1234567."
+    assert digit_runs(said) == ["973951", "03001234567"]
+    assert digit_runs("Okay. The same with one one one, one one one.") == ["111111"]
+    assert digit_runs("I'd like the first one at ten AM") == ["1"]  # words, not a reference
 
 
 def test_times_and_days_are_said_the_way_people_say_them():
