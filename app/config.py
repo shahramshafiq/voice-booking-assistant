@@ -256,6 +256,10 @@ class Settings:
     elevenlabs_speaker_boost: bool
     elevenlabs_auto_mode: bool
     tts_connect_timeout_seconds: float
+    tts_check_on_connect: bool
+    tts_check_timeout_seconds: float
+    tts_min_ms_per_character: float
+    no_audio_warning: str
     turn_timeout_seconds: float
 
     # text chunking
@@ -400,6 +404,10 @@ def load_settings():
         elevenlabs_speaker_boost=r.flag("ELEVENLABS_SPEAKER_BOOST"),
         elevenlabs_auto_mode=r.flag("ELEVENLABS_AUTO_MODE"),
         tts_connect_timeout_seconds=r.number("TTS_CONNECT_TIMEOUT_SECONDS"),
+        tts_check_on_connect=r.flag("TTS_CHECK_ON_CONNECT"),
+        tts_check_timeout_seconds=r.number("TTS_CHECK_TIMEOUT_SECONDS"),
+        tts_min_ms_per_character=r.number("TTS_MIN_MS_PER_CHARACTER"),
+        no_audio_warning=r.text("NO_AUDIO_WARNING"),
         turn_timeout_seconds=r.number("TURN_TIMEOUT_SECONDS"),
         first_chunk_chars=r.integer("FIRST_CHUNK_CHARS"),
         chunk_target_chars=r.integer("CHUNK_TARGET_CHARS"),
