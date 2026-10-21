@@ -111,6 +111,10 @@ class ToolRunner:
         self.definitions = build_definitions()
         self._yes = _word_pattern(settings.confirm_words)
         self._no = _word_pattern(settings.refuse_words)
+        words = lambda phrases: {word for phrase in phrases for word in phrase.replace("\u2019", "'").split()}
+        self._refuse_tokens = words(settings.refuse_words)
+        self._quick_yes_words = words(settings.confirm_words) | set(settings.quick_extra_words)
+        self._quick_no_words = self._refuse_tokens | set(settings.quick_extra_words)
 
     @staticmethod
     def is_write(name):
@@ -122,6 +126,24 @@ class ToolRunner:
         if self._no and self._no.search(cleaned):
             return False
         return bool(self._yes and self._yes.search(cleaned))
+
+    def quick_decision(self, ctx):
+        """'yes', 'no' or None. A reply that is ONLY a plain yes (or no) to the question just asked can be handled by
+        the code at once, without asking the model what to do. Anything with other words in it returns None."""
+        pending = self.memory.pending
+        upcoming_turn = ctx.turn_no or self.memory.turn_no + 1
+        if pending is None or pending.turn_no != upcoming_turn - 1:
+            return None
+        if time.monotonic() - pending.created >= self.settings.confirm_ttl_seconds:
+            return None
+        words = re.findall(r"[a-z']+", ctx.user_text.lower().replace("\u2019", "'"))
+        if not words or len(words) > self.settings.quick_answer_max_words:
+            return None
+        if all(word in self._quick_yes_words for word in words) and self.is_affirmative(ctx.user_text):
+            return "yes"
+        if all(word in self._quick_no_words for word in words) and any(word in self._refuse_tokens for word in words):
+            return "no"
+        return None
 
     def success_reply(self, tool, result):
         """The sentence to say after a change has really been made. Written by the code from the real result."""
@@ -232,7 +254,7 @@ class ToolRunner:
 
         await ctx.gate.wait()  # Step 2, the real change, waits until the caller has really finished speaking
         if not confirmed:
-            self.memory.set_pending(plan.key, spec.name, plan.question)
+            self.memory.set_pending(plan.key, spec.name, plan.question, args.model_dump_json())
             log.info("%s is waiting for the caller's yes", spec.name)
             return {"ok": False, "error": "CONFIRMATION_REQUIRED", "say": plan.question,
                     "message": "Nothing has been done yet. The caller is being asked to confirm."}, False

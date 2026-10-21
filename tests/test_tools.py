@@ -183,6 +183,24 @@ def test_an_old_question_expires():
     assert fake.events == {}
 
 
+def test_plain_yes_and_no_are_recognised_but_only_right_after_the_question():
+    _, _, memory, runner = setup()
+    assert runner.quick_decision(turn(memory, "yes")) is None  # nothing was asked yet
+    call(runner, "create_booking", BOOK, turn(memory, "book it"))
+    decisions = {
+        "Yes": "yes", "Yes please go ahead": "yes", "okay": "yes", "Yeah, that's right": "yes", "Sure, go ahead.": "yes",
+        "No": "no", "No thanks": "no", "Nope, don't do it": "no", "wait": "no", "never mind": "no",
+        "yes but not tomorrow": None, "Yes, and what are your hours": None, "hmm let me think": None,
+        "thanks": None, "make it three pm": None, "": None,
+    }
+    for words, expected in decisions.items():
+        _, _, memory2, runner2 = setup()
+        call(runner2, "create_booking", BOOK, turn(memory2, "book it"))
+        assert runner2.quick_decision(turn(memory2, words)) == expected, words
+    memory.turn_no += 1  # an unrelated turn in between
+    assert runner.quick_decision(turn(memory, "yes")) is None  # the question is no longer the previous turn
+
+
 def test_cancel_flow_uses_the_looked_up_details():
     fake, _, memory, runner = setup()
     call(runner, "create_booking", dict(BOOK, start_time="2026-10-23T09:00:00+05:00", end_time="2026-10-23T10:00:00+05:00"), turn(memory, "book"))

@@ -41,14 +41,38 @@ def build_instructions(settings):
 
 async def run_agent(*, llm, runner, memory, ctx, settings, instructions, history, user_text, emit, timer):
     tool_items = []  # the tool calls and results of THIS answer, sent back to the model on the next round
+    notes = []  # extra facts for the model, for example that a quick "yes" could not be carried out
     running = []  # tasks of tools that have not finished
 
     def build_input():
         # the stable part (history) first, the changing part (state, question, tool results) last
         state = memory.render_state(runner.service.now(), settings.business_timezone)
-        return [*history, {"role": "system", "content": state}, {"role": "user", "content": user_text}, *tool_items]
+        return [*history, {"role": "system", "content": state}, {"role": "user", "content": user_text}, *notes, *tool_items]
 
     try:
+        # A plain "yes" or "no" to the confirmation question needs no model at all.
+        decision = runner.quick_decision(ctx)
+        if decision == "no":
+            await ctx.gate.wait()  # a discarded draft must not forget the question
+            memory.pending = None
+            await emit("scripted", settings.reply_declined)
+            return
+        if decision == "yes":
+            pending = memory.pending
+            await emit("tool_start", pending.tool)  # lets the voice say "I'm on it" at once
+            task = asyncio.create_task(runner.run(pending.tool, pending.arguments, ctx))
+            running.append(task)
+            await emit("tools", [{"name": pending.tool, "task": task}])
+            timer.mark("tools_started")
+            result = await task
+            timer.mark("tools_done")
+            if result.get("say"):
+                await emit("scripted", result["say"])
+                return
+            # it could not be done (for example somebody took the time meanwhile): the model explains it
+            notes.append({"role": "system", "content": "The caller said yes, but the change could not be made. Result: "
+                          + for_model(result) + " Explain this simply and offer a next step."})
+
         for round_number in range(settings.max_tool_rounds + 1):
             calls = []  # [(call dict, task)]
             last_round = round_number == settings.max_tool_rounds  # on the last round the model must just answer

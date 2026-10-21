@@ -19,6 +19,7 @@ class Pending:
     key: str  # identifies exactly this action
     tool: str
     question: str  # what was read back to the caller
+    arguments: str  # the tool arguments as JSON, so a plain yes can run the very same action
     turn_no: int  # the conversation turn in which it was asked
     created: float
 
@@ -50,8 +51,8 @@ class SessionMemory:
             self.messages.pop(0)  # never start with an orphan assistant message
 
     # ---------------------------------------------------------------- the confirmation step
-    def set_pending(self, key, tool, question):
-        self.pending = Pending(key, tool, question, self.turn_no, time.monotonic())
+    def set_pending(self, key, tool, question, arguments):
+        self.pending = Pending(key, tool, question, arguments, self.turn_no, time.monotonic())
 
     def pending_is_confirmable(self, key, current_turn):
         """True when `key` is the action asked about in the turn right before this one, and the question is not too old."""

@@ -208,6 +208,9 @@ class Settings:
     confirm_words: List[str]
     refuse_words: List[str]
     confirm_ttl_seconds: float
+    quick_answer_max_words: int
+    quick_extra_words: List[str]
+    reply_declined: str
 
     # spoken while a tool works
     tool_filler_read: List[str]
@@ -350,6 +353,9 @@ def load_settings():
         confirm_words=[word.lower() for word in r.text_list("CONFIRM_WORDS")],
         refuse_words=[word.lower() for word in r.text_list("REFUSE_WORDS")],
         confirm_ttl_seconds=r.number("CONFIRM_TTL_SECONDS"),
+        quick_answer_max_words=r.integer("QUICK_ANSWER_MAX_WORDS"),
+        quick_extra_words=[word.lower() for word in r.text_list("QUICK_ANSWER_EXTRA_WORDS")],
+        reply_declined=r.text("REPLY_DECLINED"),
         tool_filler_read=r.text_list("TOOL_FILLER_READ", separator="|"),
         tool_filler_write=r.text_list("TOOL_FILLER_WRITE", separator="|"),
         tool_filler_write_delay_seconds=r.number("TOOL_FILLER_WRITE_DELAY_SECONDS"),

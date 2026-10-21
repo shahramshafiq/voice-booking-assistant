@@ -204,8 +204,7 @@ def test_a_full_booking_conversation(monkeypatch):
     llm = ScriptedLLM(
         [tool("find_available_slots", service_id="consultation", date_range={"start_date": "tomorrow"})], offer,
         [tool("create_booking", **book)],
-        [tool("create_booking", **book)],  # after the yes, the code announces the result: no further model call
-    )
+    )  # the plain yes that follows needs no model call: the code runs the action and announces it
 
     async def scenario():
         bench = Bench(monkeypatch, llm)
@@ -223,7 +222,7 @@ def test_a_full_booking_conversation(monkeypatch):
         assert len(llm.calls) == 3  # the confirmation question cost no extra model call
 
         await bench.say("Yes please")
-        assert len(llm.calls) == 4  # and announcing the booking cost none either
+        assert len(llm.calls) == 3  # the yes and the announcement cost no model call at all
         assert len(bench.fake_google.events) == 1
         spoken = bench.tts.spoken
         reference = next(iter(bench.fake_google.events.values()))["extendedProperties"]["private"]["bookingRef"]
@@ -232,13 +231,103 @@ def test_a_full_booking_conversation(monkeypatch):
         assert bench.session.memory.recent_actions
         assert bench.session.memory.messages[-1]["content"].startswith("Done. Your Consultation")
 
-        # the model was given the facts it needs when the caller said yes
+        # the model was given the facts it needs when it prepared the booking
         last_input = llm.calls[-1]["input"]
         state = [i for i in last_input if i.get("role") == "system"][0]["content"]
-        assert "name Ali Raza" in state and "Waiting for the caller to say yes or no" in state
+        assert "Times offered most recently" in state and "start 2026-10-20T09:00:00+05:00" in state
         # earlier turns are remembered
         roles = [i.get("role") for i in last_input if i.get("role") in ("user", "assistant")]
         assert roles[:2] == ["user", "assistant"]
+        await bench.stop()
+
+    run(scenario())
+
+
+BOOK_NINE = dict(customer_details={"name": "Ali Raza", "phone": "03001234567"}, service_id="consultation",
+                 start_time="2026-10-20T09:00:00+05:00", end_time="2026-10-20T10:00:00+05:00")
+
+
+def test_a_plain_yes_runs_the_action_without_asking_the_model(monkeypatch):
+    llm = ScriptedLLM([tool("create_booking", **BOOK_NINE)])  # only the first turn needs the model
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        await bench.say("Book tomorrow at nine, Ali Raza, 0300 1234567")
+        assert bench.fake_google.events == {} and bench.session.memory.pending is not None
+        await bench.say("Yes please")
+        assert len(llm.calls) == 1  # no model call at all for the yes
+        assert len(bench.fake_google.events) == 1
+        assert "Done. Your Consultation is booked for tomorrow at 9 AM." in bench.tts.spoken
+        assert bench.session.memory.pending is None
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_a_plain_no_cancels_the_question_without_asking_the_model(monkeypatch):
+    llm = ScriptedLLM([tool("create_booking", **BOOK_NINE)])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        await bench.say("Book tomorrow at nine, Ali Raza, 0300 1234567")
+        await bench.say("No thanks")
+        assert len(llm.calls) == 1
+        assert bench.fake_google.events == {} and bench.session.memory.pending is None
+        assert bench.tts.spoken.endswith(settings.reply_declined)
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_a_yes_with_more_words_goes_to_the_model(monkeypatch):
+    llm = ScriptedLLM([tool("create_booking", **BOOK_NINE)], [text("We open at nine.")])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        await bench.say("Book tomorrow at nine, Ali Raza, 0300 1234567")
+        await bench.say("Yes, and what time do you open?")
+        assert len(llm.calls) == 2 and bench.fake_google.events == {}  # the model was asked, and nothing was booked
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_a_quick_yes_that_cannot_be_carried_out_is_explained_by_the_model(monkeypatch):
+    llm = ScriptedLLM([tool("create_booking", **BOOK_NINE)], [text("Sorry, that time was just taken. Shall I find another?")])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        await bench.say("Book tomorrow at nine, Ali Raza, 0300 1234567")
+        bench.fake_google.add_event("2026-10-20T09:00:00+05:00", "2026-10-20T10:00:00+05:00")  # somebody else took it
+        await bench.say("Yes")
+        assert len(llm.calls) == 2
+        notes = [i["content"] for i in llm.calls[1]["input"] if i.get("role") == "system" and "could not be made" in i.get("content", "")]
+        assert notes and "SLOT_UNAVAILABLE" in notes[0]
+        assert len(bench.fake_google.events) == 1  # only the other person's event
+        assert "just taken" in bench.tts.spoken
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_a_discarded_yes_draft_does_nothing(monkeypatch):
+    llm = ScriptedLLM([tool("create_booking", **BOOK_NINE)])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        await bench.say("Book tomorrow at nine, Ali Raza, 0300 1234567")
+        event = {"type": "TurnInfo", "transcript": "yes", "words": [{"end": 4.0}]}
+        await bench.session._on_stt_event({"event": "StartOfTurn", **event})
+        await bench.session._on_stt_event({"event": "EagerEndOfTurn", **event})
+        await asyncio.sleep(0.1)  # the draft prepared the booking but is waiting for the caller to finish
+        await bench.session._on_stt_event({"event": "TurnResumed", **event})  # the caller kept talking
+        await asyncio.sleep(0.1)
+        assert bench.fake_google.events == {} and bench.session.memory.pending is not None
         await bench.stop()
 
     run(scenario())
@@ -449,8 +538,7 @@ def test_early_filler_for_a_change_only_when_the_caller_is_saying_yes(monkeypatc
                 start_time="2026-10-20T09:00:00+05:00", end_time="2026-10-20T10:00:00+05:00")
     llm = ScriptedLLM(
         [tool_start("create_booking"), 0.3, tool("create_booking", **book)],  # turn 1: only the confirmation question
-        [tool_start("create_booking"), 0.3, tool("create_booking", **book)],  # turn 2: the caller says yes
-        [text("All done.")],
+        [tool_start("create_booking"), 0.3, tool("create_booking", **book)],  # turn 2 (not a plain yes): the model is asked
     )
 
     async def scenario():
@@ -460,7 +548,7 @@ def test_early_filler_for_a_change_only_when_the_caller_is_saying_yes(monkeypatc
         assert not [t for t, _ in bench.tts.said if t in settings.tool_filler_write]  # no filler before a question
         assert bench.tts.spoken.startswith("Just to confirm")
         before = len(bench.tts.said)
-        await bench.say("Yes please", draft=False)
+        await bench.say("Yes please, go ahead and book it for me now", draft=False)  # more than a plain yes: the model is asked
         fillers = [(t, at) for (t, _), at in zip(bench.tts.said[before:], bench.tts.said_at[before:]) if t in settings.tool_filler_write]
         assert len(fillers) == 1 and fillers[0][1] < llm.tool_call_at - 0.1  # spoken while the arguments were still coming
         assert len(bench.fake_google.events) == 1

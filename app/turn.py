@@ -54,6 +54,7 @@ class Turn:
         self._buffer = ""  # text written but not yet cut into phrases
         self._first_sent = False  # the first phrase after a pause is small and flushed at once
         self._tail = ""  # the end of the previous phrase, for the output guardrail
+        self._ready = 0  # how many pieces of speakable text are waiting in the queue
 
     # ---------------------------------------------------------------- control
     def start(self):
@@ -135,12 +136,14 @@ class Turn:
                 if isinstance(item, Exception):
                     raise item
                 kind, data = item
+                if kind in ("text", "scripted"):
+                    self._ready -= 1
                 if kind == "text":
                     still_going = await self._speak(data)
                 elif kind == "scripted":
                     still_going = await self._speak(data, force=True, trusted=True)
                 elif kind == "tool_start":
-                    await self._early_filler(data, answer_is_ready=not queue.empty())
+                    await self._early_filler(data, answer_is_ready=self._ready > 0)
                 elif kind == "tools":
                     still_going = await self._speak("", force=True)  # say what is written before the pause
                     if still_going:
@@ -169,6 +172,8 @@ class Turn:
         async def emit(kind, data):
             if kind == "text":
                 self.timer.mark("llm_first_token")
+            if kind in ("text", "scripted"):
+                self._ready += 1
             await queue.put((kind, data))
 
         try:
