@@ -26,7 +26,6 @@ const STATUS_LABELS = {
 
 let socket = null;
 let audioContext = null;
-let modulesLoaded = false;
 let micStream = null;
 let micSource = null;
 let micNode = null;
@@ -106,6 +105,65 @@ function renderMetrics(m) {
     }
 }
 
+// ------------------------------------------------------------------ getting ready before Start is pressed
+// The page opens its connection to the server and loads the audio code as soon as it loads. Pressing Start
+// then only has to switch the microphone on, and the server has already connected to the speech services.
+let serverConfig = null; // the server's first message: sample rates, chunk size...
+let socketReady = null; // a promise that resolves with serverConfig once the connection is open
+let audioReady = null; // a promise that resolves once the audio code is loaded
+
+function openSocket() {
+    if (socketReady) return socketReady;
+    socketReady = new Promise((resolve, reject) => {
+        const protocol = location.protocol === "https:" ? "wss" : "ws";
+        const ws = new WebSocket(protocol + "://" + location.host + "/ws/voice");
+        ws.binaryType = "arraybuffer";
+        ws.onmessage = (event) => {
+            if (typeof event.data === "string") {
+                const message = JSON.parse(event.data);
+                if (message.type === "config") {
+                    serverConfig = message;
+                    resolve(message);
+                    return;
+                }
+            }
+            onServerMessage(event);
+        };
+        ws.onclose = () => {
+            socket = null;
+            socketReady = null;
+            serverConfig = null;
+            if (running) {
+                showError("The connection to the server was lost.");
+                stopConversation(false);
+            }
+        };
+        ws.onerror = () => reject(new Error("The connection to the server failed."));
+        socket = ws;
+    });
+    socketReady.catch(() => { socketReady = null; }); // allow a later retry
+    return socketReady;
+}
+
+function prepareAudio() {
+    if (!audioReady) {
+        audioReady = (async () => {
+            if (!audioContext) audioContext = new AudioContext({ latencyHint: "interactive" });
+            await Promise.all([
+                audioContext.audioWorklet.addModule("/static/mic-worklet.js"),
+                audioContext.audioWorklet.addModule("/static/player-worklet.js"),
+            ]);
+        })();
+        audioReady.catch(() => { audioReady = null; });
+    }
+    return audioReady;
+}
+
+window.addEventListener("load", () => {
+    prepareAudio().catch(() => {});
+    openSocket().catch(() => {});
+});
+
 // ------------------------------------------------------------------ start and stop
 async function startConversation() {
     clearError();
@@ -114,19 +172,10 @@ async function startConversation() {
     setStatus("connecting");
     try {
         if (!audioContext) audioContext = new AudioContext({ latencyHint: "interactive" });
-        await audioContext.resume();
-        if (!modulesLoaded) {
-            await audioContext.audioWorklet.addModule("/static/mic-worklet.js");
-            await audioContext.audioWorklet.addModule("/static/player-worklet.js");
-            modulesLoaded = true;
-        }
-
-        const protocol = location.protocol === "https:" ? "wss" : "ws";
-        socket = new WebSocket(protocol + "://" + location.host + "/ws/voice");
-        socket.binaryType = "arraybuffer";
-        socket.onmessage = onServerMessage;
-        socket.onclose = () => { if (running) stopConversation(false); };
-        socket.onerror = () => showError("The connection to the server failed.");
+        const resumed = audioContext.resume(); // must be called straight from the click
+        await Promise.all([resumed, prepareAudio(), openSocket()]);
+        await buildAudioGraph(await openSocket());
+        socket.send(JSON.stringify({ type: "start" }));
     } catch (error) {
         showError("Could not start: " + error.message);
         stopConversation(false);
@@ -139,11 +188,7 @@ function stopConversation(notifyServer = true) {
     if (notifyServer && socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "stop" }));
     }
-    if (socket) {
-        socket.onclose = null;
-        socket.close();
-        socket = null;
-    }
+    // the connection to the server stays open, so the next Start is instant
     if (micStream) micStream.getTracks().forEach((track) => track.stop());
     for (const node of [micSource, micNode, micMute, playerNode]) {
         if (node) node.disconnect();
@@ -201,7 +246,7 @@ async function buildAudioGraph(config) {
 }
 
 // ------------------------------------------------------------------ messages from the server
-async function onServerMessage(event) {
+function onServerMessage(event) {
     // binary = reply audio: hand it straight to the player
     if (typeof event.data !== "string") {
         if (playerNode) playerNode.port.postMessage({ type: "audio", pcm: event.data }, [event.data]);
@@ -210,15 +255,6 @@ async function onServerMessage(event) {
 
     const message = JSON.parse(event.data);
     switch (message.type) {
-        case "config":
-            try {
-                await buildAudioGraph(message);
-                socket.send(JSON.stringify({ type: "start" }));
-            } catch (error) {
-                showError("Microphone problem: " + error.message);
-                stopConversation(false);
-            }
-            break;
         case "ready":
             streaming = true;
             toggleButton.textContent = "Stop conversation";
@@ -248,6 +284,9 @@ async function onServerMessage(event) {
             warningEl.textContent = message.message;
             warningEl.hidden = false;
             break;
+        case "calendar_ok":
+            warningEl.hidden = true;
+            break;
         case "assistant_text":
             if (assistantBubble) assistantBubble.textContent += message.text;
             break;
@@ -272,4 +311,7 @@ async function onServerMessage(event) {
     }
 }
 
-window.addEventListener("beforeunload", () => stopConversation(true));
+window.addEventListener("beforeunload", () => {
+    stopConversation(true);
+    if (socket) socket.close();
+});

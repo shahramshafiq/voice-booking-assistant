@@ -71,6 +71,12 @@ class VoiceSession:
         self._calendar_task = None
         self._background = set()  # keeps references to small background tasks
 
+        self._connect_lock = asyncio.Lock()  # connecting happens one at a time (the page opens it, Start re-checks it)
+        self._calendar_problem = None  # the calendar's last problem, kept across conversations
+        self._calendar_warning = None  # the text shown in the browser for it
+        self._warmed_at = None  # when the calendar window was last refreshed
+        self._primed = False  # the model's prompt is primed once per page
+
     # ================================================================ sending to the browser
     async def send_event(self, event):
         if self.closed:
@@ -103,6 +109,9 @@ class VoiceSession:
             "tts_sample_rate": self.settings.tts_sample_rate,
             "barge_in_enabled": self.settings.barge_in_enabled,
         })
+        # While the page just sits open, get everything ready so that Start is instant.
+        self._spawn(self._prewarm())
+        self._calendar_task = asyncio.create_task(self._calendar_watch())
         try:
             while True:
                 message = await self.ws.receive()
@@ -149,13 +158,12 @@ class VoiceSession:
 
         # every conversation starts with an empty short-term memory
         self.memory = SessionMemory(self.settings)
+        self.memory.calendar_problem = self._calendar_problem
         self.runner = ToolRunner(self.settings, self.service, self.memory)
 
-        self.stt = DeepgramFluxStream(self.settings, self._on_stt_event, self._on_stt_closed)
-        # connect to Deepgram, ElevenLabs and Google Calendar at the same time
-        results = await asyncio.gather(
-            self.stt.connect(), self.tts.connect(), self.service.warm(), return_exceptions=True,
-        )
+        # Deepgram, ElevenLabs and the calendar were normally opened while the page was loading;
+        # anything that is not open (for example Deepgram closed an idle connection) is opened now, all at once.
+        results = await self._connect_all()
         failures = [r for r in results[:2] if isinstance(r, Exception)]
         if failures:
             log.error("could not start: %s", failures)
@@ -163,31 +171,64 @@ class VoiceSession:
                 "type": "error",
                 "message": "Could not connect: " + "; ".join(f"{type(f).__name__}: {f}" for f in failures),
             })
-            await self._stop_pipeline()
+            await self._stop_pipeline(rewarm=False)
             return
 
         # a calendar problem does not stop the call: the assistant tells the caller honestly instead
-        calendar_result = results[2]
-        if isinstance(calendar_result, CalendarError):
-            await self._set_calendar_problem(calendar_result.message, getattr(calendar_result, "hint", ""))
-        elif isinstance(calendar_result, Exception):
-            await self._set_calendar_problem(f"unexpected problem ({type(calendar_result).__name__})")
+        if self._calendar_warning:
+            await self.send_event({"type": "warning", "message": self._calendar_warning})
 
         self.last_activity = time.monotonic()
         self.stt.bytes_sent = 0
         await self._set_state("listening")
         await self.send_event({"type": "ready"})
         self._idle_task = asyncio.create_task(self._idle_watchdog())
-        self._calendar_task = asyncio.create_task(self._calendar_watch())
         log.info("session ready")
 
-    async def _stop_pipeline(self, error_message=None):
+    # ================================================================ getting ready before Start
+    async def _prewarm(self):
+        """Runs when the page opens and again after every Stop: connect the ears, the voice and the calendar and
+        prime the model's prompt, so that pressing Start has nothing left to wait for."""
+        started = time.perf_counter()
+        try:
+            await self._connect_all()
+            log.info("ready for Start (connections opened in %.0f ms)", (time.perf_counter() - started) * 1000)
+        except Exception:
+            log.exception("could not prepare the connections; they will be opened at Start")
+            return
+        if self.settings.openai_prime_on_connect and not self._primed:
+            self._primed = True
+            await self.llm.prime(self.instructions, self.runner.definitions)
+
+    async def _connect_all(self):
+        """Open whatever is not open yet; anything already open is kept. Returns [ears, voice, calendar] results."""
+        async with self._connect_lock:
+            jobs = []
+            if self.stt is None or not self.stt.is_open():
+                if self.stt is not None:
+                    await self.stt.close()
+                self.stt = DeepgramFluxStream(self.settings, self._on_stt_event, self._on_stt_closed)
+                jobs.append(self.stt.connect())
+            else:
+                jobs.append(self._nothing())
+            jobs.append(self.tts.connect())
+            window_is_old = (
+                self._warmed_at is None
+                or self._calendar_problem is not None
+                or time.monotonic() - self._warmed_at > self.settings.calendar_cache_seconds
+            )
+            jobs.append(self._warm_calendar() if window_is_old else self._nothing())
+            return await asyncio.gather(*jobs, return_exceptions=True)
+
+    @staticmethod
+    async def _nothing():
+        return None
+
+    async def _stop_pipeline(self, error_message=None, rewarm=True):
         async with self._lock:
-            for name in ("_idle_task", "_calendar_task"):
-                task = getattr(self, name)
-                if task is not None:
-                    task.cancel()
-                    setattr(self, name, None)
+            if self._idle_task is not None:
+                self._idle_task.cancel()
+                self._idle_task = None
             await self._cancel_draft_nolock()
             if self.turn is not None:
                 turn, self.turn = self.turn, None
@@ -202,11 +243,16 @@ class VoiceSession:
             if error_message:
                 await self.send_event({"type": "error", "message": error_message})
             await self._set_state("idle")
+        if rewarm and not self.closed:
+            self._spawn(self._prewarm())  # so the next Start is instant too
 
     async def shutdown(self):
         if self.closed:
             return
-        await self._stop_pipeline()
+        if self._calendar_task is not None:
+            self._calendar_task.cancel()
+            self._calendar_task = None
+        await self._stop_pipeline(rewarm=False)
         self.closed = True
         await self.tts.close()
         log.info("session closed")
@@ -228,22 +274,32 @@ class VoiceSession:
         pause = min(self.settings.calendar_warm_interval_seconds, self.settings.calendar_cache_seconds * 0.7)
         while True:
             await asyncio.sleep(pause)
-            try:
-                await self.service.warm()
-                if self.memory.calendar_problem:
-                    log.info("the calendar is reachable again")
-                    self.memory.calendar_problem = None
-            except CalendarError as exc:
-                await self._set_calendar_problem(exc.message, getattr(exc, "hint", ""))
-            except Exception as exc:
-                log.warning("calendar check failed: %s", type(exc).__name__)
+            await self._warm_calendar()
+
+    async def _warm_calendar(self):
+        """Refresh the in-memory calendar window. Never raises: a problem is remembered and shown instead."""
+        try:
+            await self.service.warm()
+        except CalendarError as exc:
+            await self._set_calendar_problem(exc.message, getattr(exc, "hint", ""))
+        except Exception as exc:
+            await self._set_calendar_problem(f"unexpected problem ({type(exc).__name__})")
+        else:
+            self._warmed_at = time.monotonic()
+            if self._calendar_problem is not None:
+                log.info("the calendar is reachable again")
+                self._calendar_problem = self._calendar_warning = None
+                self.memory.calendar_problem = None
+                await self.send_event({"type": "calendar_ok"})
 
     async def _set_calendar_problem(self, message, hint=""):
         """`message` is safe for the assistant to know; `hint` is advice for you, shown in the browser only."""
-        if self.memory.calendar_problem != message:
+        if self._calendar_problem != message:
             log.warning("calendar problem: %s", message)
+            self._calendar_problem = message
+            self._calendar_warning = f"Calendar problem: {message} {hint}".strip()
             self.memory.calendar_problem = message
-            await self.send_event({"type": "warning", "message": f"Calendar problem: {message} {hint}".strip()})
+            await self.send_event({"type": "warning", "message": self._calendar_warning})
 
     async def _on_stt_closed(self, reason):
         if self.closed or self.state == "idle":

@@ -45,18 +45,25 @@ class FakeSocket:
 
 
 class FakeSTT:
+    instances = []
+
     def __init__(self, settings, on_event, on_closed):
         self.bytes_sent = 0
         self.audio_seconds_sent = 5.0
+        self.connected = False
+        FakeSTT.instances.append(self)
 
     async def connect(self):
-        pass
+        self.connected = True
+
+    def is_open(self):
+        return self.connected
 
     async def send_audio(self, data):
         pass
 
     async def close(self):
-        pass
+        self.connected = False
 
 
 class FakeTTS:
@@ -65,6 +72,7 @@ class FakeTTS:
 
     def __init__(self, settings):
         self.said = []  # (text, flush)
+        self.connects = 0
         self.said_at = []  # when each phrase arrived
         self.contexts_opened = 0
         self.contexts_cancelled = 0
@@ -72,6 +80,7 @@ class FakeTTS:
         self._contexts = {}
 
     async def connect(self):
+        self.connects += 1
         return None, True, 0.0
 
     async def start_context(self, context_id, on_audio, on_first_audio):
@@ -109,7 +118,11 @@ class ScriptedLLM:
     def __init__(self, *rounds):
         self.rounds = list(rounds)
         self.calls = []
+        self.primed = 0
         self.tool_call_at = None  # when the last tool request was completed
+
+    async def prime(self, instructions, tools):
+        self.primed += 1
 
     async def stream(self, instructions, input_items, tools, allow_tools=True):
         self.calls.append({"instructions": instructions, "input": json.loads(json.dumps(input_items)), "tools": tools, "allow_tools": allow_tools})
@@ -147,6 +160,7 @@ class Bench:
         monkeypatch.setattr(session_module, "DeepgramFluxStream", FakeSTT)
         monkeypatch.setattr(session_module, "ElevenLabsSession", FakeTTS)
         FakeTTS.instances.clear()
+        FakeSTT.instances.clear()
         self.fake_google = FakeGoogleCalendar()
         token = settings.google_calendar_api_token if token_ok else "ya29.expired"
         self.fake_google.token = settings.google_calendar_api_token
@@ -566,6 +580,64 @@ def test_early_filler_for_a_change_only_when_the_caller_is_saying_yes(monkeypatc
         fillers = [(t, at) for (t, _), at in zip(bench.tts.said[before:], bench.tts.said_at[before:]) if t in settings.tool_fillers["create_booking"]]
         assert len(fillers) == 1 and fillers[0][1] < llm.tool_call_at - 0.1  # spoken while the arguments were still coming
         assert len(bench.fake_google.events) == 1
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_everything_is_connected_before_start_is_pressed(monkeypatch):
+    llm = ScriptedLLM()
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.session._prewarm()  # what happens when the page opens
+        gets_before = gets(bench)
+        assert len(FakeSTT.instances) == 1 and FakeSTT.instances[0].connected
+        assert bench.tts.connects == 1 and llm.primed == 1 and gets_before == 1  # ears, voice, one calendar read, prompt primed
+        started = time.monotonic()
+        await bench.start()
+        assert time.monotonic() - started < 0.1
+        assert len(FakeSTT.instances) == 1 and bench.tts.connects == 2  # the ears were re-used; the voice check is free
+        assert gets(bench) == gets_before  # and Start made no trip to Google
+        assert bench.socket.of_type("ready")
+        await bench.stop()
+
+    run(scenario())
+
+
+def gets(bench):
+    return [m for m, _ in bench.fake_google.requests].count("GET")
+
+
+def test_after_stop_the_ears_are_reconnected_for_the_next_start_and_a_dead_connection_is_replaced(monkeypatch):
+    llm = ScriptedLLM()
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.session._prewarm()
+        await bench.start()
+        await bench.session._on_control({"type": "stop"})
+        await asyncio.sleep(0.1)  # the background re-connection
+        assert len(FakeSTT.instances) == 2 and FakeSTT.instances[1].connected
+        FakeSTT.instances[1].connected = False  # Deepgram closed the idle connection meanwhile
+        await bench.start()
+        assert len(FakeSTT.instances) == 3 and bench.session.state == "listening"
+        assert llm.primed == 1  # the prompt is primed once per page, not on every Stop
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_a_calendar_problem_found_before_start_is_shown_again_at_start(monkeypatch):
+    llm = ScriptedLLM()
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm, token_ok=False)
+        await bench.session._prewarm()
+        assert len(bench.socket.of_type("warning")) == 1 and bench.session._calendar_problem
+        await bench.start()  # Start must not forget it: the banner is cleared by the page when Start is pressed
+        assert len(bench.socket.of_type("warning")) == 2
+        assert bench.session.memory.calendar_problem
         await bench.stop()
 
     run(scenario())
