@@ -43,8 +43,14 @@ def test_card_numbers_are_removed_but_phone_numbers_are_not():
     assert luhn_ok("4111111111111111") and not luhn_ok("4111111111111112")
     verdict = INPUT.check("my card is 4111 1111 1111 1111 please")
     assert verdict.action == "redact" and "4111" not in verdict.text and "[card number removed]" in verdict.text
-    phone = INPUT.check("call me on 0092 300 1234567")  # 13 digits, but not a card number
+    phone = INPUT.check("call me on 0092 300 1234567")  # 14 digits, but a phone number, not a card
     assert phone.action == "allow"
+    # what speech recognition really writes (from a live test: one group of digits was lost on the way)
+    spoken = INPUT.check("My card number is four two four two four two four two four two four two")
+    assert spoken.action == "redact" and spoken.text == "My card number is [card number removed]"
+    spoken_phone = INPUT.check("My name is Ali and my number is zero three zero zero one two three four five six seven.")
+    assert spoken_phone.action == "allow"  # a spoken phone number stays
+    assert INPUT.check("The reference is nine seven three nine five one").action == "allow"
 
 
 # ---------------------------------------------------------------------- output

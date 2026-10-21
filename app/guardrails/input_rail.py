@@ -12,7 +12,12 @@ from dataclasses import dataclass
 
 log = logging.getLogger("guardrail.input")
 
-CARD_NUMBER = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
+# Speech recognition writes digits as words ("four two four two"), so both forms are checked.
+DIGIT_WORDS = {"zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+               "six": "6", "seven": "7", "eight": "8", "nine": "9"}
+WRITTEN_DIGITS = re.compile(r"(?<!\d)(?:\d[ -]?){10,19}(?!\d)")
+SPOKEN_DIGITS = re.compile(r"\b(?:(?:%s)\b[\s,.-]*){10,19}" % "|".join(DIGIT_WORDS), re.IGNORECASE)
+CARD_WORDS = re.compile(r"\b(?:card|visa|mastercard|credit|debit)\b", re.IGNORECASE)
 
 
 @dataclass
@@ -50,13 +55,20 @@ class InputRail:
                 log.warning("input blocked: matched %r", pattern.pattern[:40])
                 return InputVerdict("block", "", self.settings.input_block_reply, "injection")
 
-        redacted = CARD_NUMBER.sub(self._remove_if_card, text)
+        card_talk = bool(CARD_WORDS.search(text))
+        redacted = WRITTEN_DIGITS.sub(lambda match: self._remove_if_card(match, card_talk), text)
+        redacted = SPOKEN_DIGITS.sub(lambda match: self._remove_if_card(match, card_talk), redacted)
         if redacted != text:
             log.warning("input changed: a card number was removed")
             return InputVerdict("redact", redacted, reason="card_number")
         return InputVerdict("allow", text)
 
     @staticmethod
-    def _remove_if_card(match):
-        digits = re.sub(r"\D", "", match.group(0))
-        return "[card number removed]" if 13 <= len(digits) <= 19 and luhn_ok(digits) else match.group(0)
+    def _remove_if_card(match, card_talk):
+        """A real card number passes the Luhn check. Speech recognition can drop or mishear a digit, so when the caller
+        is talking about a card, any long number goes (a phone number said in the same breath goes too)."""
+        original = match.group(0)
+        digits = "".join(DIGIT_WORDS.get(piece.lower(), piece) for piece in re.findall(r"\d|[a-z]+", original, re.IGNORECASE))
+        if not (card_talk or (13 <= len(digits) <= 19 and luhn_ok(digits))):
+            return original
+        return "[card number removed]" + (" " if original[-1].isspace() else "")
