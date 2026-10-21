@@ -51,6 +51,7 @@ class FakeSTT:
     def __init__(self, settings, on_event, on_closed):
         self.bytes_sent = 0
         self.audio_seconds_sent = 5.0
+        self.behind_ms = 200
         self.connected = False
         self.configured = []  # every (eot_threshold, eot_timeout_ms) sent with Configure
         FakeSTT.instances.append(self)

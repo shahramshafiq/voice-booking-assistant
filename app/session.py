@@ -467,8 +467,9 @@ class VoiceSession:
         self.awaiting_drain = False
         self.memory.turn_no += 1  # only turns that are really committed get a number
         turn.commit(self.memory.turn_no)  # opens the gate: the reply may now be spoken
-        log.info("turn %d committed (draft_hit=%s, input=%s, eot_lag_ms=%s, deepgram_sure=%s): %r", turn.turn_id,
-                 turn.draft_hit, verdict.action, turn.eot_lag_ms, self._how_sure(event), shown_text)
+        log.info("turn %d committed (draft_hit=%s, input=%s, eot_lag_ms=%s, deepgram_behind_ms=%s, deepgram_sure=%s): %r",
+                 turn.turn_id, turn.draft_hit, verdict.action, turn.eot_lag_ms, self.stt.behind_ms if self.stt else None,
+                 self._how_sure(event), shown_text)
         await self._tune_end_of_turn()  # the answer is in: back to the normal settings
 
         await self.send_event({"type": "transcript_final", "text": shown_text})

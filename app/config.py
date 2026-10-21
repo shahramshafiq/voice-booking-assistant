@@ -243,6 +243,7 @@ class Settings:
     deepgram_eot_timeout_ms: int
     deepgram_confirm_eot_threshold: Optional[float]  # used only for the answer to a confirmation question
     deepgram_confirm_eot_timeout_ms: int
+    stt_lag_warning_ms: float
 
     # ElevenLabs (TTS)
     elevenlabs_api_key: str
@@ -395,6 +396,7 @@ def load_settings():
         deepgram_eot_timeout_ms=r.integer("DEEPGRAM_EOT_TIMEOUT_MS"),
         deepgram_confirm_eot_threshold=r.optional_number("DEEPGRAM_CONFIRM_EOT_THRESHOLD"),
         deepgram_confirm_eot_timeout_ms=r.integer("DEEPGRAM_CONFIRM_EOT_TIMEOUT_MS"),
+        stt_lag_warning_ms=r.number("STT_LAG_WARNING_MS"),
         elevenlabs_api_key=r.text("ELEVENLABS_API_KEY"),
         elevenlabs_ws_base_url=r.text("ELEVENLABS_WS_BASE_URL"),
         elevenlabs_voice_id=r.text("ELEVENLABS_VOICE_ID"),
