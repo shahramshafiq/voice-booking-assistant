@@ -8,7 +8,7 @@ A voice receptionist that books, looks up, moves and cancels appointments in Goo
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
 ![OpenAI](https://img.shields.io/badge/OpenAI-gpt--4.1--mini-412991?style=flat-square&logo=openai&logoColor=white)
 ![Google Calendar](https://img.shields.io/badge/Google%20Calendar-API%20v3-4285F4?style=flat-square&logo=googlecalendar&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-131%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-135%20passing-brightgreen?style=flat-square)
 
 </div>
 
@@ -29,7 +29,7 @@ You open a web page, press Start and talk. The assistant listens, decides what y
 - **Input and output guardrails:** the input rail blocks instruction-override attempts and removes card numbers. The output rail stops secrets and instruction leaks, blocks "booked it" claims that no tool confirmed, and stops made-up booking references.
 - **Short-term memory:** the conversation plus a state block written by the code (name, phone, offered times, looked-up booking, pending question). It is rebuilt empty on every call.
 - **Honest failures:** an expired or invalid calendar token shows a clear warning and the assistant says it cannot reach the calendar, instead of pretending to book.
-- **Natural voice behavior:** barge-in (interrupt it while it talks), short filler phrases while a slow tool works, and replies cleaned for speech.
+- **Natural voice behavior:** barge-in (interrupt it while it talks, while a short "yeah" or "okay" does not cut it off), short filler phrases while a slow tool works that flow into the answer, a quick "Okay." when you have finished but speech recognition is still catching up, and replies cleaned for speech.
 
 ## Tech Stack
 
@@ -67,7 +67,7 @@ voice-booking-assistant/
   prompts/               System prompt template
   scripts/               check_calendar.py (free Google Calendar check)
   static/                Web page, audio worklets, styles
-  tests/                 131 tests with fake services
+  tests/                 135 tests with fake services
 ```
 
 ## Getting Started
@@ -143,7 +143,7 @@ When the page opens, the app speaks one tiny word and throws it away. If ElevenL
 python -m pytest
 ```
 
-The 131 tests use a fake Google Calendar, fake Deepgram and ElevenLabs connections and a scripted model, so they need no keys and cost nothing. They cover date parsing, slot maths, the booking rules, the confirmation gate, the guardrails and whole conversations.
+The 135 tests use a fake Google Calendar, fake Deepgram and ElevenLabs connections and a scripted model, so they need no keys and cost nothing. They cover date parsing, slot maths, the booking rules, the confirmation gate, the guardrails and whole conversations.
 
 ## Limitations and Roadmap
 
