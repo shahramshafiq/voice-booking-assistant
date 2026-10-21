@@ -239,17 +239,19 @@ class Turn:
         before the caller did)."""
         if self.sent_chunks or self._buffer.strip() or answer_is_ready:
             return
-        if self.runner.is_write(name):
-            if not self.runner.expects_confirmed_change(name, self.ctx):
-                return  # most likely only the confirmation question, which is instant and needs no filler
-            phrases = self.settings.tool_filler_write
-        else:
-            phrases = self.settings.tool_filler_read
+        phrases = self._filler_phrases(name)
         if not phrases:
             return
         self.timer.mark("filler_sent")
         await self._emit_chunk(phrases[self.turn_id % len(phrases)], flush=True, model=False)
         self._first_sent = False  # the first real phrase after the filler is flushed at once
+
+    def _filler_phrases(self, name):
+        """Which phrases fit this tool right now? A change that is only being prepared (the confirmation question
+        comes next) gets a different sentence from a change the caller has just said yes to."""
+        if self.runner.is_write(name) and not self.runner.expects_confirmed_change(name, self.ctx):
+            return self.settings.tool_filler_prepare
+        return self.settings.tool_fillers.get(name, [])
 
     async def _maybe_say_filler(self, calls):
         """While a tool works, say a short phrase so the line never goes silent. Skipped when something was
@@ -258,11 +260,9 @@ class Turn:
             return
         tasks = [call["task"] for call in calls]
         if any(self.runner.is_write(call["name"]) for call in calls):
-            phrases = self.settings.tool_filler_write
             # a change that only needs a confirmation question finishes at once and needs no filler
             await asyncio.wait(tasks, timeout=self.settings.tool_filler_write_delay_seconds)
-        else:
-            phrases = self.settings.tool_filler_read
+        phrases = self._filler_phrases(calls[0]["name"])
         if all(task.done() for task in tasks) or not phrases:
             return
         self.timer.mark("filler_sent")

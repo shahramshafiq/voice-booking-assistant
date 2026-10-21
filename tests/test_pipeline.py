@@ -193,6 +193,11 @@ def run(coroutine):
     return asyncio.run(coroutine)
 
 
+def all_fillers():
+    """Every filler sentence the assistant can say while a tool works."""
+    return {phrase for phrases in settings.tool_fillers.values() for phrase in phrases} | set(settings.tool_filler_prepare)
+
+
 # ---------------------------------------------------------------------- scenarios
 def test_a_full_booking_conversation(monkeypatch):
     def offer(items):
@@ -263,6 +268,14 @@ def test_a_plain_yes_runs_the_action_without_asking_the_model(monkeypatch):
         await bench.stop()
 
     run(scenario())
+
+
+def test_every_kind_of_tool_has_its_own_natural_sentences():
+    assert set(settings.tool_fillers) == {"get_services", "get_business_config", "check_calendar_availability", "find_available_slots",
+                                          "get_booking", "create_booking", "reschedule_booking", "cancel_booking"}
+    assert all(settings.tool_fillers.values()) and settings.tool_filler_prepare
+    assert "booking" in settings.tool_fillers["create_booking"][0] and "cancelling" in settings.tool_fillers["cancel_booking"][0]
+    assert "moving" in settings.tool_fillers["reschedule_booking"][0] and "booking" in settings.tool_fillers["get_booking"][0]
 
 
 def test_a_plain_no_cancels_the_question_without_asking_the_model(monkeypatch):
@@ -492,7 +505,7 @@ def test_a_filler_covers_a_slow_tool_and_the_pause_is_primed(monkeypatch):
         await bench.start()
         await bench.say("what is free tomorrow", draft=False)  # no early start, so the tool is still running at commit
         first, second = bench.tts.said[0], bench.tts.said[1]
-        assert first[0] in settings.tool_filler_read and first[1] is True  # the filler goes out at once
+        assert first[0] in settings.tool_fillers["find_available_slots"] and first[1] is True  # the filler goes out at once
         assert second[1] is True  # and the first phrase after the pause is flushed too
         # the filler is not part of what the model said, so it is not in the memory
         assert bench.session.memory.messages[-1]["content"] == "I have nine tomorrow. Shall I book it?"
@@ -509,9 +522,9 @@ def test_the_filler_starts_when_the_tool_request_starts_not_when_it_is_finished(
         bench = Bench(monkeypatch, llm)
         await bench.start()
         await bench.say("what is free tomorrow", draft=False)
-        assert bench.tts.said[0][0] in settings.tool_filler_read
+        assert bench.tts.said[0][0] in settings.tool_fillers["find_available_slots"]
         assert bench.tts.said_at[0] < llm.tool_call_at - 0.2  # said while the model was still writing the arguments
-        assert len([t for t, _ in bench.tts.said if t in settings.tool_filler_read]) == 1  # and only once
+        assert len([t for t, _ in bench.tts.said if t in all_fillers()]) == 1  # and only once
         assert bench.tts.said[1][1] is True  # the answer after it is flushed at once
         await bench.stop()
 
@@ -526,7 +539,7 @@ def test_no_filler_when_the_early_draft_already_has_the_answer(monkeypatch):
         bench = Bench(monkeypatch, llm)
         await bench.start()
         await bench.say("what is free tomorrow", draft=True)  # everything is finished before the caller is
-        assert not [t for t, _ in bench.tts.said if t in settings.tool_filler_read]
+        assert not [t for t, _ in bench.tts.said if t in all_fillers()]
         assert bench.tts.spoken == "I have nine tomorrow. Shall I book it?"
         await bench.stop()
 
@@ -545,11 +558,12 @@ def test_early_filler_for_a_change_only_when_the_caller_is_saying_yes(monkeypatc
         bench = Bench(monkeypatch, llm)
         await bench.start()
         await bench.say("Book tomorrow at nine, Ali Raza, 0300 1234567", draft=False)
-        assert not [t for t, _ in bench.tts.said if t in settings.tool_filler_write]  # no filler before a question
-        assert bench.tts.spoken.startswith("Just to confirm")
+        assert bench.tts.said[0][0] in settings.tool_filler_prepare  # a sentence covers the wait before the question
+        assert bench.tts.said[0][0] not in settings.tool_fillers["create_booking"]  # but not the "I'm booking it" one
+        assert bench.tts.spoken.endswith("Shall I book it?")
         before = len(bench.tts.said)
         await bench.say("Yes please, go ahead and book it for me now", draft=False)  # more than a plain yes: the model is asked
-        fillers = [(t, at) for (t, _), at in zip(bench.tts.said[before:], bench.tts.said_at[before:]) if t in settings.tool_filler_write]
+        fillers = [(t, at) for (t, _), at in zip(bench.tts.said[before:], bench.tts.said_at[before:]) if t in settings.tool_fillers["create_booking"]]
         assert len(fillers) == 1 and fillers[0][1] < llm.tool_call_at - 0.1  # spoken while the arguments were still coming
         assert len(bench.fake_google.events) == 1
         await bench.stop()

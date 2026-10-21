@@ -213,8 +213,8 @@ class Settings:
     reply_declined: str
 
     # spoken while a tool works
-    tool_filler_read: List[str]
-    tool_filler_write: List[str]
+    tool_fillers: dict  # tool name -> the phrases to say while it works
+    tool_filler_prepare: List[str]
     tool_filler_write_delay_seconds: float
 
     # what is said when a change has been made
@@ -308,6 +308,14 @@ def load_settings():
         except (ZoneInfoNotFoundError, ValueError):
             r.problems.append(f"BUSINESS_TIMEZONE {timezone!r} is not a known time zone (try Asia/Karachi)")
 
+    search = r.text_list("TOOL_FILLER_SEARCH", separator="|")
+    book, move, cancel = (r.text_list(name, separator="|") for name in ("TOOL_FILLER_BOOK", "TOOL_FILLER_RESCHEDULE", "TOOL_FILLER_CANCEL"))
+    fillers = {
+        "get_services": search, "get_business_config": search, "check_calendar_availability": search, "find_available_slots": search,
+        "get_booking": r.text_list("TOOL_FILLER_LOOKUP", separator="|"),
+        "create_booking": book, "reschedule_booking": move, "cancel_booking": cancel,
+    }
+
     settings = Settings(
         host=r.text("HOST"),
         port=r.integer("PORT"),
@@ -356,8 +364,8 @@ def load_settings():
         quick_answer_max_words=r.integer("QUICK_ANSWER_MAX_WORDS"),
         quick_extra_words=[word.lower() for word in r.text_list("QUICK_ANSWER_EXTRA_WORDS")],
         reply_declined=r.text("REPLY_DECLINED"),
-        tool_filler_read=r.text_list("TOOL_FILLER_READ", separator="|"),
-        tool_filler_write=r.text_list("TOOL_FILLER_WRITE", separator="|"),
+        tool_fillers=fillers,
+        tool_filler_prepare=r.text_list("TOOL_FILLER_PREPARE", separator="|"),
         tool_filler_write_delay_seconds=r.number("TOOL_FILLER_WRITE_DELAY_SECONDS"),
         reply_booked=r.reply_template("REPLY_BOOKED"),
         reply_already_booked=r.reply_template("REPLY_ALREADY_BOOKED"),
