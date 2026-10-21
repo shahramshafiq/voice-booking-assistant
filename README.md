@@ -8,7 +8,7 @@ A voice receptionist that books, looks up, moves and cancels appointments in Goo
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
 ![OpenAI](https://img.shields.io/badge/OpenAI-gpt--4.1--mini-412991?style=flat-square&logo=openai&logoColor=white)
 ![Google Calendar](https://img.shields.io/badge/Google%20Calendar-API%20v3-4285F4?style=flat-square&logo=googlecalendar&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-131%20passing-brightgreen?style=flat-square)
 
 </div>
 
@@ -22,7 +22,7 @@ You open a web page, press Start and talk. The assistant listens, decides what y
 - **Confirm before any change:** a booking, move or cancellation happens only after the assistant reads the details back and you say yes in the next turn. The question is written by the code, so what you hear is exactly what gets booked.
 - **Early draft for speed:** the model starts working when Deepgram thinks you are nearly done. Read-only checks and the calendar re-check run early, and the final change waits until you have really finished speaking.
 - **Ready before you press Start:** the page connects to the server and the speech services while it loads, the next weeks of the calendar are kept in memory and refreshed in the background, and the model's prompt is warmed, so Start and searches for free times do not wait for the network. The check right before a change always asks Google again.
-- **Fast confirmations:** a plain yes or no to the confirmation question is handled by the code without asking the model, and the result of a booking, move or cancellation is announced from the real result, so those steps need no extra model call.
+- **Fast confirmations:** while the caller answers the confirmation question, Deepgram is told to decide sooner that a short "yes" is finished. A plain yes or no is then handled by the code without asking the model, and the result of a booking, move or cancellation is announced from the real result, so those steps need no extra model call.
 - **No dead air:** the moment a tool starts, a natural sentence for that kind of tool is spoken ("Sure, let me check the calendar.", "Okay, I'm booking that for you now.").
 - **Safe against retries and races:** a repeated request returns the existing booking, a lost reply is checked before reporting failure, a reschedule updates the same calendar event and keeps the original if it fails, and two callers cannot take one slot.
 - **Identity checks:** lookup, reschedule and cancel need the booking reference and the phone number, and wrong tries are limited per call and per phone number.
@@ -67,7 +67,7 @@ voice-booking-assistant/
   prompts/               System prompt template
   scripts/               check_calendar.py (free Google Calendar check)
   static/                Web page, audio worklets, styles
-  tests/                 125 tests with fake services
+  tests/                 131 tests with fake services
 ```
 
 ## Getting Started
@@ -143,7 +143,7 @@ When the page opens, the app speaks one tiny word and throws it away. If ElevenL
 python -m pytest
 ```
 
-The 125 tests use a fake Google Calendar, fake Deepgram and ElevenLabs connections and a scripted model, so they need no keys and cost nothing. They cover date parsing, slot maths, the booking rules, the confirmation gate, the guardrails and whole conversations.
+The 131 tests use a fake Google Calendar, fake Deepgram and ElevenLabs connections and a scripted model, so they need no keys and cost nothing. They cover date parsing, slot maths, the booking rules, the confirmation gate, the guardrails and whole conversations.
 
 ## Limitations and Roadmap
 
