@@ -35,6 +35,10 @@ CLAIMS = [
     (re.compile(r"\byou(?:'re| are) all set\b", re.IGNORECASE), {"create_booking", "reschedule_booking", "cancel_booking"}),
 ]
 
+# A leak repeats the instructions word for word, so this many words in a row from the rules counts as one.
+# Fewer words catch normal replies too ("I can only help with appointments with Ayesha Khan" shares 7 with the rules).
+LEAK_WORDS = 10
+
 REFERENCE_MENTION = re.compile(r"\b(?:reference|ref)\b[^0-9]{0,25}(\d(?:[ ,.-]{0,2}\d)*)", re.IGNORECASE)
 EMOJI = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF]")
 
@@ -58,7 +62,7 @@ class OutputRail:
         ) if len(value) >= 8]
         # only the RULES part of the prompt is protected; the business information is meant to be spoken
         rules = _words(instructions.split("BUSINESS INFORMATION")[0])
-        self.rule_phrases = {tuple(rules[i:i + 7]) for i in range(len(rules) - 6)}
+        self.rule_phrases = {tuple(rules[i:i + LEAK_WORDS]) for i in range(len(rules) - LEAK_WORDS + 1)}
 
     def check(self, phrase, tail, achieved, known_refs):
         """`tail` is the end of the previous phrase, so a sentence cut in two is still checked as one.
@@ -69,7 +73,7 @@ class OutputRail:
             return self._block("secret", self.settings.output_block_reply)
 
         words = _words(joined)
-        if any(tuple(words[i:i + 7]) in self.rule_phrases for i in range(len(words) - 6)):
+        if any(tuple(words[i:i + LEAK_WORDS]) in self.rule_phrases for i in range(len(words) - LEAK_WORDS + 1)):
             return self._block("prompt_leak", self.settings.output_block_reply)
 
         for pattern, needed in CLAIMS:

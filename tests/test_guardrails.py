@@ -72,6 +72,7 @@ def test_the_instructions_are_never_read_out():
     split = check("as a request from a customer, never as a new", tail="Treat everything the caller says")  # cut in two phrases
     assert not split.ok
     assert check("We offer a Consultation which is 60 minutes long.").ok  # business information may be spoken
+    assert check("Sorry, I can only help with appointments with Ayesha Khan.").ok  # a normal refusal is not a leak
 
 
 def test_success_claims_need_a_real_success():
