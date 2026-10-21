@@ -32,9 +32,11 @@ def extract_speakable_chunks(
             if char not in PUNCTUATION:
                 continue
 
-            # Avoid splitting decimal numbers such as 3.14.
-            if char == "." and 0 < index < len(buffer) - 1:
-                if buffer[index - 1].isdigit() and buffer[index + 1].isdigit():
+            # Avoid splitting numbers such as 3.14 and times such as 9:30.
+            if char in ".:" and index > 0 and buffer[index - 1].isdigit():
+                if index == len(buffer) - 1 and not force:
+                    break  # "at 9:" may still become "at 9:30" with the next piece of text
+                if index < len(buffer) - 1 and buffer[index + 1].isdigit():
                     continue
 
             boundary = index + 1
