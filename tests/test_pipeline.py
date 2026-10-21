@@ -69,6 +69,7 @@ class FakeSTT:
 class FakeTTS:
     """Follows the real class's interface. Each text it receives immediately 'produces' audio."""
     instances = []
+    silent = False  # True: like an ElevenLabs account without credits (finishes, but no sound)
 
     def __init__(self, settings):
         self.said = []  # (text, flush)
@@ -83,6 +84,9 @@ class FakeTTS:
         self.connects += 1
         return None, True, 0.0
 
+    async def check_voice(self, text="Hi."):
+        return 0 if FakeTTS.silent else 6400
+
     async def start_context(self, context_id, on_audio, on_first_audio):
         self.contexts_opened += 1
         self._contexts[context_id] = {"on_audio": on_audio, "on_first_audio": on_first_audio, "first": False}
@@ -91,10 +95,12 @@ class FakeTTS:
         context = self._contexts[context_id]
         self.said.append((text.strip(), flush))
         self.said_at.append(time.monotonic())
+        if FakeTTS.silent:
+            return
         if not context["first"]:
             context["first"] = True
             await context["on_first_audio"]()
-        await context["on_audio"](b"\x00\x00" * 320)
+        await context["on_audio"](b"\x00\x00" * 320 * max(1, len(text.strip()) // 4))
 
     async def finish_context(self, context_id):
         self._contexts.pop(context_id, None)
@@ -160,6 +166,7 @@ class Bench:
         monkeypatch.setattr(session_module, "DeepgramFluxStream", FakeSTT)
         monkeypatch.setattr(session_module, "ElevenLabsSession", FakeTTS)
         FakeTTS.instances.clear()
+        FakeTTS.silent = False
         FakeSTT.instances.clear()
         self.fake_google = FakeGoogleCalendar()
         token = settings.google_calendar_api_token if token_ok else "ya29.expired"
@@ -644,6 +651,52 @@ def test_a_calendar_problem_found_before_start_is_shown_again_at_start(monkeypat
         await bench.start()  # Start must not forget it: the banner is cleared by the page when Start is pressed
         assert len(bench.socket.of_type("warning")) == 2
         assert bench.session.memory.calendar_problem
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_a_voice_that_returns_no_sound_is_found_when_the_page_opens_and_again_at_start(monkeypatch):
+    llm = ScriptedLLM()
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        FakeTTS.silent = True
+        await bench.session._prewarm()
+        warnings = bench.socket.of_type("warning")
+        assert len(warnings) == 1 and "credits" in warnings[0]["message"]
+        await bench.start()
+        assert len(bench.socket.of_type("warning")) == 2  # shown again, because Start clears the banner
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_a_working_voice_passes_the_check_quietly(monkeypatch):
+    llm = ScriptedLLM()
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.session._prewarm()
+        assert bench.socket.of_type("warning") == [] and bench.session._voice_checked
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_a_silent_reply_is_explained_and_the_text_is_still_kept(monkeypatch):
+    llm = ScriptedLLM([text("We offer a consultation, a follow up and an extended consultation. Which one would you like?")])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        FakeTTS.silent = True
+        await bench.say("what do you offer")
+        warnings = bench.socket.of_type("warning")
+        assert warnings and warnings[-1]["message"] == settings.no_audio_warning
+        shown = bench.socket.of_type("assistant_text")[-1]["text"]
+        assert shown.startswith("We offer a consultation")  # the reply is on the page even though nothing could be heard
+        assert bench.session.memory.messages[-1]["content"].startswith("We offer a consultation")
         await bench.stop()
 
     run(scenario())
