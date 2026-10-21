@@ -43,13 +43,16 @@ TOOLS = {spec.name: spec for spec in [
     ToolSpec("find_available_slots", FindSlotsArgs,
              "Find free appointment times for a service over one or more days. Use this to offer times."),
     ToolSpec("create_booking", CreateBookingArgs,
-             "Book an appointment. The system reads the details back and asks the caller to confirm; "
-             "call it again with the same details after the caller says yes.", write=True),
+             "Book an appointment. Call it as soon as you have the service, the time, the name and the phone number, "
+             "without asking the caller first: the system reads the details back and asks them to confirm. "
+             "After the caller says yes, call it again with the same details.", write=True),
     ToolSpec("get_booking", BookingLookupArgs, "Look up a booking by reference and phone number."),
     ToolSpec("reschedule_booking", RescheduleArgs,
-             "Move a booking to a new day and time. The system asks the caller to confirm first.", write=True),
+             "Move a booking to a new day and time. Call it as soon as you have the new time, without asking the caller "
+             "first: the system asks them to confirm. After the yes, call it again with the same details.", write=True),
     ToolSpec("cancel_booking", BookingLookupArgs,
-             "Cancel a booking. The system asks the caller to confirm first.", write=True),
+             "Cancel a booking. Call it as soon as the caller asks to cancel, without asking them first: the system "
+             "asks them to confirm. After the yes, call it again with the same details.", write=True),
 ]}
 
 NEEDS_VERIFICATION = {"get_booking", "reschedule_booking", "cancel_booking"}
