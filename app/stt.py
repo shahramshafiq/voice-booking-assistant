@@ -29,6 +29,15 @@ class DeepgramFluxStream:
         self.bytes_sent = 0
         self._closing = False
 
+    def is_open(self):
+        """True while the connection to Deepgram is usable."""
+        return (
+            self.websocket is not None
+            and self.websocket.close_code is None
+            and self.reader_task is not None
+            and not self.reader_task.done()
+        )
+
     @property
     def audio_seconds_sent(self):
         """How many seconds of audio we have streamed so far (16-bit mono = 2 bytes per sample)."""
