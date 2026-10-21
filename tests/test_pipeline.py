@@ -52,7 +52,11 @@ class FakeSTT:
         self.bytes_sent = 0
         self.audio_seconds_sent = 5.0
         self.connected = False
+        self.configured = []  # every (eot_threshold, eot_timeout_ms) sent with Configure
         FakeSTT.instances.append(self)
+
+    async def configure(self, eot_threshold, eot_timeout_ms):
+        self.configured.append((eot_threshold, eot_timeout_ms))
 
     async def connect(self):
         self.connected = True
@@ -293,6 +297,27 @@ def test_a_plain_yes_runs_the_action_without_asking_the_model(monkeypatch):
         assert len(bench.fake_google.events) == 1
         assert "Done. Your Consultation is booked for tomorrow at 9 AM." in bench.tts.spoken
         assert bench.session.memory.pending is None
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_deepgram_decides_sooner_only_for_the_answer_to_the_confirmation_question(monkeypatch):
+    llm = ScriptedLLM([text("We open at 9 AM.")], [tool("create_booking", **BOOK_NINE)])
+    quick = (settings.deepgram_confirm_eot_threshold, settings.deepgram_confirm_eot_timeout_ms)
+    normal = (settings.deepgram_eot_threshold, settings.deepgram_eot_timeout_ms)
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        stt = bench.session.stt
+        await bench.say("When do you open?")
+        assert stt.configured == []  # an ordinary answer changes nothing
+        await bench.say("Book tomorrow at nine, Ali Raza, 0300 1234567")
+        assert stt.configured == [quick]  # the question has been heard: the yes or no is judged sooner
+        await bench.say("Yes please")
+        assert stt.configured == [quick, normal]  # the answer is in: normal again
+        assert len(bench.fake_google.events) == 1
         await bench.stop()
 
     run(scenario())
@@ -797,6 +822,7 @@ def test_an_interrupted_confirmation_question_is_asked_again(monkeypatch):
         # the caller talks over the question before hearing it (nothing was played yet)
         await bench.session._on_stt_event({"event": "StartOfTurn", "type": "TurnInfo", "transcript": "yes", "words": []})
         assert bench.session.memory.pending is None
+        assert bench.session.stt.configured == []  # an unheard question does not make Deepgram hurry
         await bench.session._on_stt_event({"event": "EndOfTurn", "type": "TurnInfo", "transcript": "yes", "words": [{"end": 6.0}]})
         await asyncio.sleep(0.2)
         assert bench.fake_google.events == {}  # that yes did not count

@@ -64,6 +64,7 @@ class VoiceSession:
         self.closed = False
 
         self._ignore_user_turn = False  # barge-in off: ignore speech that started while the bot talked
+        self._quick_end = False  # True while Deepgram uses the quicker settings for a yes/no answer
         self._send_lock = asyncio.Lock()  # one message at a time to the browser
         self._lock = asyncio.Lock()  # one state change at a time
         self._drain_task = None
@@ -229,6 +230,7 @@ class VoiceSession:
                 if self.stt is not None:
                     await self.stt.close()
                 self.stt = DeepgramFluxStream(self.settings, self._on_stt_event, self._on_stt_closed)
+                self._quick_end = False  # a new connection starts with the normal settings
                 jobs.append(self.stt.connect())
             else:
                 jobs.append(self._nothing())
@@ -344,6 +346,10 @@ class VoiceSession:
                 await self._handle_turn_info(event)
         elif kind == "Connected":
             log.info("Deepgram connected")
+        elif kind == "ConfigureSuccess":
+            log.info("Deepgram turn settings now: %s", event.get("thresholds"))
+        elif kind == "ConfigureFailure":
+            log.warning("Deepgram refused the new turn settings, the old ones stay: %s", event)
         elif kind and "error" in kind.lower():
             log.error("Deepgram error: %s", event)
             await self.send_event({"type": "error", "message": f"Deepgram: {event}"})
@@ -463,6 +469,7 @@ class VoiceSession:
         turn.commit(self.memory.turn_no)  # opens the gate: the reply may now be spoken
         log.info("turn %d committed (draft_hit=%s, input=%s, eot_lag_ms=%s, deepgram_sure=%s): %r", turn.turn_id,
                  turn.draft_hit, verdict.action, turn.eot_lag_ms, self._how_sure(event), shown_text)
+        await self._tune_end_of_turn()  # the answer is in: back to the normal settings
 
         await self.send_event({"type": "transcript_final", "text": shown_text})
         await self._set_state("thinking")
@@ -472,9 +479,27 @@ class VoiceSession:
         sure = event.get("end_of_turn_confidence")
         if not isinstance(sure, (int, float)):
             return "unknown"
-        if sure < self.settings.deepgram_eot_threshold:
+        threshold = self.settings.deepgram_confirm_eot_threshold if self._quick_end else self.settings.deepgram_eot_threshold
+        if sure < threshold:
             return f"{sure:.2f}, below the threshold: probably the silence timeout"
         return f"{sure:.2f}"
+
+    async def _tune_end_of_turn(self):
+        """Right after the confirmation question the caller usually just says "yes" or "no". Deepgram is often unsure
+        that such a short answer is finished and waits for its silence timeout, so for that one answer it is told to
+        decide sooner. Called whenever a reply ends or an answer is committed; it only sends something on a change."""
+        s = self.settings
+        if s.deepgram_confirm_eot_threshold is None or self.stt is None:
+            return
+        pending = self.memory.pending
+        wanted = pending is not None and pending.turn_no == self.memory.turn_no  # the last reply asked the question
+        if wanted == self._quick_end:
+            return
+        self._quick_end = wanted
+        if wanted:
+            await self.stt.configure(s.deepgram_confirm_eot_threshold, s.deepgram_confirm_eot_timeout_ms)
+        else:
+            await self.stt.configure(s.deepgram_eot_threshold, s.deepgram_eot_timeout_ms)
 
     def _eot_lag_ms(self, event):
         """How long after the user's last word did Deepgram tell us they were done?"""
@@ -553,6 +578,7 @@ class VoiceSession:
         self.played_ms = 0
         self.memory.add_exchange(turn.user_text, turn.answer)
         await self._set_state("listening")
+        await self._tune_end_of_turn()  # quicker if that reply was the confirmation question
 
     # ================================================================ barge-in
     async def _interrupt_nolock(self):
@@ -578,3 +604,4 @@ class VoiceSession:
         self.played_ms = 0
         await self.send_event({"type": "interrupted", "heard": heard})
         await self._set_state("listening")
+        await self._tune_end_of_turn()  # the caller may be answering the question they just heard

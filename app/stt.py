@@ -78,6 +78,18 @@ class DeepgramFluxStream:
         except Exception as exc:
             log.warning("could not send audio to Deepgram: %s", type(exc).__name__)
 
+    async def configure(self, eot_threshold, eot_timeout_ms):
+        """Change how quickly Flux decides that a turn is finished, without reconnecting.
+        Deepgram answers with ConfigureSuccess (or ConfigureFailure, and the old values stay)."""
+        websocket = self.websocket
+        if websocket is None or websocket.close_code is not None:
+            return
+        message = {"type": "Configure", "thresholds": {"eot_threshold": eot_threshold, "eot_timeout_ms": eot_timeout_ms}}
+        try:
+            await websocket.send(json.dumps(message))
+        except Exception as exc:
+            log.warning("could not send the new turn settings to Deepgram: %s", type(exc).__name__)
+
     async def _read_loop(self):
         reason = "Deepgram closed the connection"
         try:

@@ -241,6 +241,8 @@ class Settings:
     deepgram_eot_threshold: float
     deepgram_eager_eot_threshold: Optional[float]
     deepgram_eot_timeout_ms: int
+    deepgram_confirm_eot_threshold: Optional[float]  # used only for the answer to a confirmation question
+    deepgram_confirm_eot_timeout_ms: int
 
     # ElevenLabs (TTS)
     elevenlabs_api_key: str
@@ -391,6 +393,8 @@ def load_settings():
         deepgram_eot_threshold=r.number("DEEPGRAM_EOT_THRESHOLD"),
         deepgram_eager_eot_threshold=r.optional_number("DEEPGRAM_EAGER_EOT_THRESHOLD"),
         deepgram_eot_timeout_ms=r.integer("DEEPGRAM_EOT_TIMEOUT_MS"),
+        deepgram_confirm_eot_threshold=r.optional_number("DEEPGRAM_CONFIRM_EOT_THRESHOLD"),
+        deepgram_confirm_eot_timeout_ms=r.integer("DEEPGRAM_CONFIRM_EOT_TIMEOUT_MS"),
         elevenlabs_api_key=r.text("ELEVENLABS_API_KEY"),
         elevenlabs_ws_base_url=r.text("ELEVENLABS_WS_BASE_URL"),
         elevenlabs_voice_id=r.text("ELEVENLABS_VOICE_ID"),
@@ -430,6 +434,14 @@ def load_settings():
                 r.problems.append("DEEPGRAM_EAGER_EOT_THRESHOLD must be between 0.3 and 0.9, or empty to switch it off")
             elif settings.deepgram_eager_eot_threshold > settings.deepgram_eot_threshold:
                 r.problems.append("DEEPGRAM_EAGER_EOT_THRESHOLD must not be higher than DEEPGRAM_EOT_THRESHOLD")
+        confirm = settings.deepgram_confirm_eot_threshold
+        if confirm is not None:
+            if not 0.5 <= confirm <= 1.0:
+                r.problems.append("DEEPGRAM_CONFIRM_EOT_THRESHOLD must be between 0.5 and 1.0, or empty to switch it off")
+            elif settings.deepgram_eager_eot_threshold is not None and settings.deepgram_eager_eot_threshold > confirm:
+                r.problems.append("DEEPGRAM_EAGER_EOT_THRESHOLD must not be higher than DEEPGRAM_CONFIRM_EOT_THRESHOLD")
+            if not 500 <= settings.deepgram_confirm_eot_timeout_ms <= 60000:
+                r.problems.append("DEEPGRAM_CONFIRM_EOT_TIMEOUT_MS must be between 500 and 60000")
         if settings.deepgram_encoding != "linear16":
             r.problems.append("DEEPGRAM_ENCODING must be linear16 (the browser sends 16-bit PCM)")
         if not 4 <= settings.booking_ref_digits <= 9:
