@@ -8,7 +8,7 @@ A voice receptionist that books, looks up, moves and cancels appointments in Goo
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
 ![OpenAI](https://img.shields.io/badge/OpenAI-gpt--4.1--mini-412991?style=flat-square&logo=openai&logoColor=white)
 ![Google Calendar](https://img.shields.io/badge/Google%20Calendar-API%20v3-4285F4?style=flat-square&logo=googlecalendar&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-135%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-137%20passing-brightgreen?style=flat-square)
 
 </div>
 
@@ -67,7 +67,7 @@ voice-booking-assistant/
   prompts/               System prompt template
   scripts/               check_calendar.py (free Google Calendar check)
   static/                Web page, audio worklets, styles
-  tests/                 135 tests with fake services
+  tests/                 137 tests with fake services
 ```
 
 ## Getting Started
@@ -143,7 +143,7 @@ When the page opens, the app speaks one tiny word and throws it away. If ElevenL
 python -m pytest
 ```
 
-The 135 tests use a fake Google Calendar, fake Deepgram and ElevenLabs connections and a scripted model, so they need no keys and cost nothing. They cover date parsing, slot maths, the booking rules, the confirmation gate, the guardrails and whole conversations.
+The 137 tests use a fake Google Calendar, fake Deepgram and ElevenLabs connections and a scripted model, so they need no keys and cost nothing. They cover date parsing, slot maths, the booking rules, the confirmation gate, the guardrails and whole conversations.
 
 ## Limitations and Roadmap
 
