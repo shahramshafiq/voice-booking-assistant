@@ -6,6 +6,7 @@ what ends up in the calendar, and what the memory holds.
 """
 import asyncio
 import json
+import logging
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -471,6 +472,27 @@ def test_a_transcript_with_no_words_is_ignored(monkeypatch):
         await bench.stop()
 
     run(scenario())
+
+
+def test_the_log_shows_what_was_said_and_how_sure_deepgram_was(monkeypatch, caplog):
+    llm = ScriptedLLM([text("We open at 9 AM. Your number is 03001234567.")])
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        event = {"type": "TurnInfo", "transcript": "When do you open?", "words": [{"end": 4.0}], "end_of_turn_confidence": 0.41}
+        await bench.session._on_stt_event({"event": "StartOfTurn", **event})
+        await bench.session._on_stt_event({"event": "EndOfTurn", **event})
+        for _ in range(100):
+            if bench.session.awaiting_drain:
+                break
+            await asyncio.sleep(0.01)
+        await bench.stop()
+
+    with caplog.at_level(logging.INFO):
+        run(scenario())
+    assert "deepgram_sure=0.41, below the threshold: probably the silence timeout" in caplog.text
+    assert "turn 1 said: We open at 9 AM. Your number is 0300 1234567." in caplog.text  # plain numbers, like the page
 
 
 class SlowCloseLLM(ScriptedLLM):

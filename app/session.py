@@ -461,10 +461,20 @@ class VoiceSession:
         self.awaiting_drain = False
         self.memory.turn_no += 1  # only turns that are really committed get a number
         turn.commit(self.memory.turn_no)  # opens the gate: the reply may now be spoken
-        log.info("turn %d committed (draft_hit=%s, input=%s): %r", turn.turn_id, turn.draft_hit, verdict.action, shown_text)
+        log.info("turn %d committed (draft_hit=%s, input=%s, eot_lag_ms=%s, deepgram_sure=%s): %r", turn.turn_id,
+                 turn.draft_hit, verdict.action, turn.eot_lag_ms, self._how_sure(event), shown_text)
 
         await self.send_event({"type": "transcript_final", "text": shown_text})
         await self._set_state("thinking")
+
+    def _how_sure(self, event):
+        """Deepgram's confidence that the caller had finished. Below the threshold means it gave up waiting instead."""
+        sure = event.get("end_of_turn_confidence")
+        if not isinstance(sure, (int, float)):
+            return "unknown"
+        if sure < self.settings.deepgram_eot_threshold:
+            return f"{sure:.2f}, below the threshold: probably the silence timeout"
+        return f"{sure:.2f}"
 
     def _eot_lag_ms(self, event):
         """How long after the user's last word did Deepgram tell us they were done?"""
@@ -557,6 +567,7 @@ class VoiceSession:
         self._cancel_drain_watchdog()
 
         heard = turn.heard_text(self.played_ms)  # 3. remember only what was actually heard
+        log.info("turn %d: the caller heard %r", turn.turn_id, heard)
         self.memory.add_exchange(turn.user_text, heard)
         pending = self.memory.pending
         if pending is not None and pending.turn_no == turn.turn_id and len(heard) < 0.85 * len(pending.question):

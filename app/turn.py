@@ -162,6 +162,7 @@ class Turn:
             await self._report_if_the_voice_was_silent()
             log.info("turn %s: all audio generated (%.1f s of sound for %d characters)", self.turn_id, self.audio_ms / 1000,
                      sum(len(chunk) for chunk in self.sent_chunks))
+            log.info("turn %s said: %s", self.turn_id, tidy_numbers(" ".join(self._display)))
 
         finally:
             producer.cancel()
