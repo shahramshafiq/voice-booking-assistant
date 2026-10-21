@@ -697,6 +697,25 @@ def test_the_filler_starts_when_the_tool_request_starts_not_when_it_is_finished(
     run(scenario())
 
 
+def test_after_a_filler_the_answer_is_not_cut_into_tiny_pieces(monkeypatch):
+    llm = ScriptedLLM(
+        [tool_start("find_available_slots"), 0.2, tool("find_available_slots", service_id="consultation", date_range={"start_date": "tomorrow"})],
+        [text("I have nine in the morning "), text("or half past nine tomorrow, "), text("which one would you like?")],
+    )
+
+    async def scenario():
+        bench = Bench(monkeypatch, llm)
+        await bench.start()
+        await bench.say("What is free tomorrow?", draft=False)
+        said = bench.tts.said
+        assert said[0][0] in all_fillers()
+        # the filler covers the wait, so the answer starts with a natural phrase (flushed) instead of a tiny piece
+        assert said[1][1] is True and len(said[1][0]) > settings.first_chunk_chars + settings.chunk_max_extra_chars
+        await bench.stop()
+
+    run(scenario())
+
+
 def test_no_filler_when_the_early_draft_already_has_the_answer(monkeypatch):
     slots = tool("find_available_slots", service_id="consultation", date_range={"start_date": "tomorrow"})
     llm = ScriptedLLM([tool_start("find_available_slots"), slots], [text("I have nine tomorrow. Shall I book it?")])

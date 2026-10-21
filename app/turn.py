@@ -55,6 +55,7 @@ class Turn:
         self._context_open = False
         self._buffer = ""  # text written but not yet cut into phrases
         self._first_sent = False  # the first phrase after a pause is small and flushed at once
+        self._after_filler = False  # a filler is playing, so the next phrase can be a natural size (still flushed)
         self._tail = ""  # the end of the previous phrase, for the output guardrail
         self._ready = 0  # how many pieces of speakable text are waiting in the queue
 
@@ -215,7 +216,7 @@ class Turn:
         chunks, self._buffer = extract_speakable_chunks(
             self._buffer,
             force=force,
-            first_chunk=not self._first_sent,
+            first_chunk=not self._first_sent and not self._after_filler,
             first_chunk_chars=self.settings.first_chunk_chars,
             target_chars=self.settings.chunk_target_chars,
             max_extra_chars=self.settings.chunk_max_extra_chars,
@@ -262,6 +263,7 @@ class Turn:
         self.timer.mark("filler_sent")
         await self._emit_chunk(phrases[self.turn_id % len(phrases)], flush=True, model=False)
         self._first_sent = False  # the first real phrase after the filler is flushed at once
+        self._after_filler = True
 
     def _filler_phrases(self, name):
         """Which phrases fit this tool right now? A change that is only being prepared (the confirmation question
@@ -284,6 +286,7 @@ class Turn:
             return
         self.timer.mark("filler_sent")
         await self._emit_chunk(phrases[self.turn_id % len(phrases)], flush=True, model=False)
+        self._after_filler = True
 
     async def _on_first_audio(self):
         self.timer.mark("tts_first_audio")
