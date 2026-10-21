@@ -103,6 +103,7 @@ class BookingService:
         self._write_lock = asyncio.Lock()  # Limit: one lock for the one staff member; per-day locks if that ever limits us
         self._recent_writes = []  # (start, end, event id, time) of changes this server made a moment ago
         self._failed_lookups = {}  # phone key -> times of wrong reference/phone tries, across all callers
+        self._background = set()  # keeps references to small background tasks
 
     def now(self):
         return self._clock() if self._clock else datetime.now(self.tz)
@@ -131,8 +132,41 @@ class BookingService:
     def _day_start(self, day):
         return datetime.combine(day, time.min, tzinfo=self.tz)
 
+    async def _window_events(self, fresh=False):
+        """Every event from today to the last bookable day, in ONE request. It is kept in memory and refreshed
+        in the background (see warm), so searching for free times and looking up a booking need no trip to Google."""
+        today = self.now().date()
+        last = today + timedelta(days=self.settings.max_advance_days + 1)
+        return await self.calendar.list_events(self._day_start(today), self._day_start(last), fresh=fresh)
+
+    async def warm(self):
+        """Refresh the in-memory window now. It also proves the token still works (a failure raises CalendarError)."""
+        await self._window_events(fresh=True)
+
+    def _rewarm_soon(self):
+        """After a change, refill the window in the background so the next question is answered from memory."""
+        async def refill():
+            try:
+                await self.warm()
+            except Exception as exc:
+                log.debug("background refresh failed: %s", type(exc).__name__)
+
+        task = asyncio.ensure_future(refill())
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
     async def _day_events(self, day, fresh=False):
-        return await self.calendar.list_events(self._day_start(day), self._day_start(day + timedelta(days=1)), fresh=fresh)
+        today = self.now().date()
+        inside_window = today <= day <= today + timedelta(days=self.settings.max_advance_days)
+        if fresh or not inside_window:
+            return await self.calendar.list_events(self._day_start(day), self._day_start(day + timedelta(days=1)), fresh=fresh)
+        start, end = self._day_start(day), self._day_start(day + timedelta(days=1))
+        found = []
+        for event in await self._window_events():
+            bounds = event_bounds(event, self.tz)
+            if bounds is not None and bounds[0] < end and bounds[1] > start:
+                found.append(event)
+        return found
 
     def _payload(self, slots):
         today = self.now().date()
@@ -188,7 +222,7 @@ class BookingService:
             raise BookingError("TOO_FAR", f"Appointments can only be booked up to {self.settings.max_advance_days} days ahead.")
         last_day = min(last_day, horizon, first_day + timedelta(days=self.settings.max_search_days - 1))
 
-        events = await self.calendar.list_events(self._day_start(first_day), self._day_start(last_day + timedelta(days=1)))
+        events = await self._window_events()
         busy = busy_intervals(events, self.rules, exclude_id)
         days = []
         day = first_day
@@ -249,8 +283,9 @@ class BookingService:
         return BookingError("SLOT_UNAVAILABLE", messages[problem] + " Offer the alternatives, if there are any.", reason=problem, alternatives=alternatives)
 
     # ================================================================ tool 6: look up
-    async def _find_booking(self, reference_text, phone_text):
-        """Find a booking only when the reference AND the phone number match. One generic error otherwise."""
+    async def _find_booking(self, reference_text, phone_text, fresh=False):
+        """Find a booking only when the reference AND the phone number match. One generic error otherwise.
+        fresh=True asks Google; otherwise the in-memory window answers (no network)."""
         digits = self.settings.booking_ref_digits
         reference = re.sub(r"\D", "", str(reference_text or ""))
         try:
@@ -268,7 +303,11 @@ class BookingService:
 
         events = []
         if len(reference) == digits:
-            events = await self.calendar.list_events(private_props={"bookingRef": reference, "customerPhoneKey": key}, fresh=True)
+            if fresh:
+                events = await self.calendar.list_events(private_props={"bookingRef": reference, "customerPhoneKey": key}, fresh=True)
+            else:
+                events = [e for e in await self._window_events()
+                          if _private(e).get("bookingRef") == reference and _private(e).get("customerPhoneKey") == key]
             events = [e for e in events if e.get("status") != "cancelled"]
         if not events:
             recent.append(now)
@@ -284,13 +323,15 @@ class BookingService:
     # prepare() reads and checks everything against the live calendar and changes NOTHING, so it can run
     # while the caller is still finishing the sentence. plan.apply() makes the one change; whoever calls it
     # decides when (only after the caller said yes, and after the caller really finished speaking).
-    async def prepare(self, tool_name, args, known=None):
+    async def prepare(self, tool_name, args, known=None, fresh=True):
         """Step 1 of a change. Returns a Plan:
           plan.result set      already decided (an error, or a retry of something that was already done);
           plan.key/question    what the caller must confirm, and plan.apply() to run after the yes.
+        fresh=False checks against the in-memory window (used for the confirmation QUESTION); fresh=True asks
+        Google (used before the real change, so the final check is always live).
         """
         try:
-            return await getattr(self, f"_prepare_{tool_name}")(args, known)
+            return await getattr(self, f"_prepare_{tool_name}")(args, known, fresh)
         except BookingError as exc:
             log.info("%s -> %s", tool_name, exc.code)
             return Plan(result=exc.as_result())
@@ -363,14 +404,14 @@ class BookingService:
         digits = self.settings.booking_ref_digits
         return str(secrets.randbelow(10 ** digits)).zfill(digits)
 
-    async def _prepare_create_booking(self, args, known):
+    async def _prepare_create_booking(self, args, known, fresh):
         service, name, phone, start, end, idem = self._check_create_args(args)
         ref = self._new_reference()
         notice = self._notice(service)
         today = self.now().date()
 
         read_at = time_module.monotonic()
-        events = await self._day_events(start.date(), fresh=True)  # always the live calendar before a change
+        events = await self._day_events(start.date(), fresh=fresh)
         for event in events:
             same_request = (
                 _private(event).get("idemKey") == idem
@@ -411,6 +452,7 @@ class BookingService:
                         raise
                     log.warning("create_booking: the answer was lost but the event exists, reference %s", ref)
                 self._remember_write(start, end, event["id"])
+            self._rewarm_soon()
             log.info("booked %s, reference %s", service["id"], ref)
             created = {"id": event["id"], "start": body["start"], "end": body["end"], "extendedProperties": body["extendedProperties"]}
             return {"ok": True, "already_booked": False, **self._booking_dict(created)}
@@ -427,8 +469,8 @@ class BookingService:
         except ValueError as exc:
             raise BookingError("INVALID_INPUT", str(exc))
 
-    async def _prepare_reschedule_booking(self, args, known):
-        event = await self._find_booking(args.booking_reference, args.customer_phone)
+    async def _prepare_reschedule_booking(self, args, known, fresh):
+        event = await self._find_booking(args.booking_reference, args.customer_phone, fresh=fresh)
         old_start, old_end = event_bounds(event, self.tz)
         if old_start < self.now():
             raise BookingError("PAST_BOOKING", "That appointment has already taken place.")
@@ -452,7 +494,7 @@ class BookingService:
             raise BookingError("NO_CHANGE", "The appointment is already at that time.")
 
         read_at = time_module.monotonic()
-        events = await self._day_events(day, fresh=True)
+        events = await self._day_events(day, fresh=fresh)
         problem = slot_problem(new_start, new_end, busy_intervals(events, self.rules, event["id"]), self.rules, self.now(), notice)
         if problem:
             raise await self._unavailable(problem, new_start, duration, notice, events, exclude_id=event["id"])
@@ -469,13 +511,14 @@ class BookingService:
                     })
                 except CalendarUnavailable as exc:
                     # the answer got lost: look at the calendar before saying that nothing changed
-                    now_event = await self._find_booking(args.booking_reference, args.customer_phone)
+                    now_event = await self._find_booking(args.booking_reference, args.customer_phone, fresh=True)
                     if event_bounds(now_event, self.tz)[0] != new_start:
                         raise BookingError(exc.code, exc.message + " The original appointment has not been changed.")
                     log.warning("reschedule_booking: the answer was lost but the change was made")
                 except CalendarError as exc:
                     raise BookingError(exc.code, exc.message + " The original appointment has not been changed.")
                 self._remember_write(new_start, new_end, event["id"])
+            self._rewarm_soon()
             log.info("rescheduled booking %s", _private(event).get("bookingRef"))
             moved = dict(event, start={"dateTime": new_start.isoformat()}, end={"dateTime": new_end.isoformat()})
             return {"ok": True, **self._booking_dict(moved)}
@@ -487,8 +530,8 @@ class BookingService:
         return Plan(key=key, question=question, apply=self._safe(reschedule_booking))
 
     # ---------------------------------------------------------------- cancel
-    async def _prepare_cancel_booking(self, args, known):
-        event = await self._find_booking(args.booking_reference, args.customer_phone)
+    async def _prepare_cancel_booking(self, args, known, fresh):
+        event = await self._find_booking(args.booking_reference, args.customer_phone, fresh=fresh)
         start, _ = event_bounds(event, self.tz)
         hours_left = (start - self.now()).total_seconds() / 3600
         if hours_left < 0:
@@ -502,6 +545,7 @@ class BookingService:
 
         async def cancel_booking():
             await self.calendar.delete_event(event["id"])
+            self._rewarm_soon()
             log.info("cancelled booking %s", _private(event).get("bookingRef"))
             return {"ok": True, "cancelled": True, **self._booking_dict(event)}
 

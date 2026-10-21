@@ -154,7 +154,7 @@ class VoiceSession:
         self.stt = DeepgramFluxStream(self.settings, self._on_stt_event, self._on_stt_closed)
         # connect to Deepgram, ElevenLabs and Google Calendar at the same time
         results = await asyncio.gather(
-            self.stt.connect(), self.tts.connect(), self.service.calendar.check_access(), return_exceptions=True,
+            self.stt.connect(), self.tts.connect(), self.service.warm(), return_exceptions=True,
         )
         failures = [r for r in results[:2] if isinstance(r, Exception)]
         if failures:
@@ -223,11 +223,13 @@ class VoiceSession:
                 return
 
     async def _calendar_watch(self):
-        """Keeps the Google connection warm and notices when the token expires during the call."""
+        """Refreshes the in-memory calendar window and notices when the token expires during the call.
+        It refreshes before the memory would go stale, so a question never has to wait for Google."""
+        pause = min(self.settings.calendar_warm_interval_seconds, self.settings.calendar_cache_seconds * 0.7)
         while True:
-            await asyncio.sleep(self.settings.calendar_warm_interval_seconds)
+            await asyncio.sleep(pause)
             try:
-                await self.service.calendar.check_access()
+                await self.service.warm()
                 if self.memory.calendar_problem:
                     log.info("the calendar is reachable again")
                     self.memory.calendar_problem = None

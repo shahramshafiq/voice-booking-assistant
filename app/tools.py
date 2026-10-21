@@ -209,7 +209,9 @@ class ToolRunner:
     async def _run_write(self, spec, args, ctx):
         # Step 1, which may happen during the early draft: check everything against the live calendar.
         # Nothing is changed here, so a discarded draft costs nothing.
-        plan = await self.service.prepare(spec.name, args, self.memory.verified_booking)
+        # The confirmation QUESTION is checked against the in-memory calendar window; the check before the real
+        # change (the caller is saying yes) always asks Google.
+        plan = await self.service.prepare(spec.name, args, self.memory.verified_booking, fresh=self.expects_confirmed_change(spec.name, ctx))
         if plan.result is not None:  # an error, or a retry of something already done: nothing to confirm
             return plan.result, False
 

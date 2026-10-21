@@ -239,6 +239,7 @@ def test_a_short_calendar_hiccup_is_retried_and_a_long_one_is_reported():
     fake, service = make()
     fake.fail_next = [(503, False)]
     assert run(service.find_available_slots(slot_args()))["ok"] is True  # the retry worked
+    service.calendar._cache.clear()  # forget the calendar window, so the next question really has to ask Google
     fake.fail_next = [(503, False), (503, False)]
     result = run(service.check_calendar_availability(CheckAvailabilityArgs(date="friday", duration=30)))
     assert result["ok"] is False and result["error"] == "CALENDAR_UNAVAILABLE"

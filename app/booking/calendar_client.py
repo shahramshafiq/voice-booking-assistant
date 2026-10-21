@@ -130,7 +130,9 @@ class CalendarClient:
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
-        self._cache[key] = (time.monotonic(), events)
+        now = time.monotonic()
+        self._cache = {k: v for k, v in self._cache.items() if now - v[0] < self.settings.calendar_cache_seconds}
+        self._cache[key] = (now, events)
         return events
 
     async def check_access(self):
