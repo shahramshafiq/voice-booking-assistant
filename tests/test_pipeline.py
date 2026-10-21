@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import time
+from array import array
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -92,6 +93,9 @@ class FakeTTS:
 
     async def check_voice(self, text="Hi."):
         return 0 if FakeTTS.silent else 6400
+
+    async def synthesize(self, text):
+        return b"" if FakeTTS.silent else b"\x01\x00" * 3200
 
     async def start_context(self, context_id, on_audio, on_first_audio):
         self.contexts_opened += 1
@@ -495,6 +499,44 @@ def test_a_transcript_with_no_words_is_ignored(monkeypatch):
         await bench.say("...", draft=False)
         assert llm.calls == [] and bench.session.draft is None and bench.session.turn is None
         assert bench.session.memory.turn_no == 0 and bench.session.state == "listening"
+        await bench.stop()
+
+    run(scenario())
+
+
+def test_a_short_okay_is_said_when_the_caller_went_quiet_but_deepgram_is_still_busy(monkeypatch):
+    loud = array("h", [3000, -3000] * 640).tobytes()  # 80 ms of speech
+    quiet = bytes(2560)  # 80 ms of silence
+
+    async def feed(session, piece, times):
+        for _ in range(times):
+            await session._on_mic_audio(piece)
+        await asyncio.sleep(0.01)
+
+    async def scenario():
+        bench = Bench(monkeypatch, ScriptedLLM())
+        await bench.start()
+        session = bench.session
+        await session._check_voice()  # the phrases' sound is made once, like when the page opens
+        assert [phrase for phrase, _ in session._ack_sounds] == settings.listen_ack_phrases
+
+        await feed(session, loud, 10)
+        await feed(session, quiet, 25)
+        assert bench.socket.audio == b""  # never on the first turn of a call (that is usually just "hello")
+
+        session.memory.turn_no = 1
+        await feed(session, loud, 10)  # 0.8 s of speech
+        await feed(session, quiet, 18)  # 1.44 s of quiet: not yet
+        assert bench.socket.audio == b""
+        await feed(session, quiet, 2)  # 1.6 s: Deepgram is still busy, so "Okay." is played at once
+        heard = len(bench.socket.audio)
+        assert heard > 0 and bench.socket.of_type("audio_end")
+        await feed(session, quiet, 25)
+        assert len(bench.socket.audio) == heard  # only once per pause
+
+        await feed(session, loud, 2)  # a cough
+        await feed(session, quiet, 25)
+        assert len(bench.socket.audio) == heard  # is not speech
         await bench.stop()
 
     run(scenario())

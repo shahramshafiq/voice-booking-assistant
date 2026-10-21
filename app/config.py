@@ -75,6 +75,10 @@ class _Reader:
             self.problems.append(f"{name} must be a number or left empty, got {value!r}")
             return None
 
+    def optional_list(self, name, separator="|"):
+        """Blank or missing means 'off' (an empty list)."""
+        return [part.strip() for part in (os.getenv(name) or "").split(separator) if part.strip()]
+
     def flag(self, name):
         value = self._raw(name)
         if value is None:
@@ -273,6 +277,12 @@ class Settings:
     # browser audio
     mic_chunk_ms: int
 
+    # "I heard you": said when the caller has gone quiet but Deepgram has not finished yet
+    listen_ack_phrases: List[str]
+    listen_ack_silence_ms: float
+    listen_ack_min_speech_ms: float
+    local_speech_rms: float
+
     # behaviour
     barge_in_enabled: bool
     idle_timeout_seconds: float
@@ -419,6 +429,10 @@ def load_settings():
         chunk_target_chars=r.integer("CHUNK_TARGET_CHARS"),
         chunk_max_extra_chars=r.integer("CHUNK_MAX_EXTRA_CHARS"),
         mic_chunk_ms=r.integer("MIC_CHUNK_MS"),
+        listen_ack_phrases=r.optional_list("LISTEN_ACK_PHRASES"),
+        listen_ack_silence_ms=r.number("LISTEN_ACK_SILENCE_MS"),
+        listen_ack_min_speech_ms=r.number("LISTEN_ACK_MIN_SPEECH_MS"),
+        local_speech_rms=r.number("LOCAL_SPEECH_RMS"),
         barge_in_enabled=r.flag("BARGE_IN_ENABLED"),
         idle_timeout_seconds=r.number("IDLE_TIMEOUT_SECONDS"),
         drain_grace_seconds=r.number("DRAIN_GRACE_SECONDS"),

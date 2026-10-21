@@ -20,8 +20,10 @@ Messages to the browser:
 import asyncio
 import json
 import logging
+import math
 import re
 import time
+from array import array
 
 from .booking.calendar_client import CalendarError
 from .memory import SessionMemory
@@ -79,6 +81,11 @@ class VoiceSession:
         self._primed = False  # the model's prompt is primed once per page
         self._voice_checked = False  # the voice is tested once per page
         self._voice_warning = None  # set when the voice returned no sound
+        self._ack_sounds = []  # [(phrase, sound)] of the "I heard you" phrases, made when the page opened
+        self._ack_count = 0
+        self._speech_ms = 0.0  # microphone: loud time in the current stretch of speech
+        self._quiet_ms = 0.0  # microphone: quiet time since the last loud piece
+        self._levels = ([], [])  # microphone loudness of the loud and the quiet pieces since the last turn
 
     # ================================================================ sending to the browser
     async def send_event(self, event):
@@ -137,6 +144,42 @@ class VoiceSession:
     async def _on_mic_audio(self, data):
         if self.stt is not None and self.state != "idle":
             await self.stt.send_audio(data)
+            self._listen_for_a_pause(data)
+
+    def _listen_for_a_pause(self, data):
+        """A simple loudness check on the microphone, in real time (Deepgram's answer can come late). When the caller
+        has spoken and then been quiet for LISTEN_ACK_SILENCE_MS while Deepgram has still not finished the turn, a short
+        "Okay." is played so the caller knows they were heard and does not repeat themselves."""
+        s = self.settings
+        if self.turn is not None or len(data) < 2:
+            self._speech_ms = self._quiet_ms = 0.0  # the assistant is already answering: nothing to acknowledge
+            return
+        samples = array("h", data[:len(data) // 2 * 2])  # 16-bit PCM from the browser
+        level = math.sqrt(sum(x * x for x in samples) / len(samples))
+        loud = level >= s.local_speech_rms
+        self._levels[0 if loud else 1].append(level)  # shown in the log when the turn is committed
+        piece_ms = len(samples) / s.deepgram_sample_rate * 1000
+        if loud:
+            self._speech_ms += piece_ms
+            self._quiet_ms = 0.0
+            return
+        self._quiet_ms += piece_ms
+        if self._quiet_ms < s.listen_ack_silence_ms:
+            return
+        spoke_for, self._speech_ms = self._speech_ms, 0.0  # a pause this long ends the stretch of speech either way
+        if (spoke_for >= s.listen_ack_min_speech_ms and self._ack_sounds and self.state == "listening"
+                and self.memory.turn_no > 0 and not self._ignore_user_turn):
+            self._spawn(self._say_ack())
+
+    async def _say_ack(self):
+        if self.turn is not None:
+            return  # the answer has started meanwhile
+        phrase, sound = self._ack_sounds[self._ack_count % len(self._ack_sounds)]
+        self._ack_count += 1
+        log.info("said %r: you went quiet and Deepgram has not finished the turn yet (it is %s ms behind)", phrase,
+                 self.stt.behind_ms if self.stt else "?")
+        await self.send_audio(sound)
+        await self.send_event({"type": "audio_end"})  # the player plays it, finishes, and starts fresh for the answer
 
     async def _on_control(self, message):
         kind = message.get("type")
@@ -209,12 +252,17 @@ class VoiceSession:
             await self.llm.prime(self.instructions, self.runner.definitions)
 
     async def _check_voice(self):
-        """Speak one tiny word and discard it. Finds an empty ElevenLabs account before anybody talks to the assistant."""
+        """Make the sound of the short "I heard you" phrases once and keep it, so they play instantly later. This also
+        finds an empty ElevenLabs account before anybody talks to the assistant."""
+        phrases = self.settings.listen_ack_phrases or ["Hi."]
         try:
-            produced = await self.tts.check_voice()
+            sounds = [(phrase, await self.tts.synthesize(phrase)) for phrase in phrases]
         except Exception as exc:
             log.warning("could not test the voice: %s: %s", type(exc).__name__, exc)
             return
+        produced = sum(len(sound) for _, sound in sounds)
+        if self.settings.listen_ack_phrases:
+            self._ack_sounds = [(phrase, sound) for phrase, sound in sounds if sound]
         if produced == 0:
             log.error("VOICE PROBLEM: the voice returned no sound at all; the account may be out of credits")
             self._voice_warning = self.settings.no_audio_warning
@@ -470,6 +518,12 @@ class VoiceSession:
         log.info("turn %d committed (draft_hit=%s, input=%s, eot_lag_ms=%s, deepgram_behind_ms=%s, deepgram_sure=%s): %r",
                  turn.turn_id, turn.draft_hit, verdict.action, turn.eot_lag_ms, self.stt.behind_ms if self.stt else None,
                  self._how_sure(event), shown_text)
+        loud, quiet = self._levels
+        if loud or quiet:
+            log.info("turn %d microphone: speech level %s, background %s (speech counts from LOCAL_SPEECH_RMS=%.0f)",
+                     turn.turn_id, f"{max(loud):.0f}" if loud else "none", f"{sorted(quiet)[len(quiet) // 2]:.0f}" if quiet else "none",
+                     self.settings.local_speech_rms)
+        self._levels = ([], [])
         await self._tune_end_of_turn()  # the answer is in: back to the normal settings
 
         await self.send_event({"type": "transcript_final", "text": shown_text})

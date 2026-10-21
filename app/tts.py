@@ -110,11 +110,14 @@ class ElevenLabsSession:
         0 means the voice is not working. When the account is out of credits ElevenLabs does not send an error:
         it simply answers every text with "no audio, finished".
         """
-        total = 0
+        return len(await self.synthesize(text))
+
+    async def synthesize(self, text):
+        """Speak a short text and return its sound (16-bit PCM), for example to play it later without waiting."""
+        sound = bytearray()
 
         async def count(audio):
-            nonlocal total
-            total += len(audio)
+            sound.extend(audio)
 
         async def nothing():
             pass
@@ -126,7 +129,7 @@ class ElevenLabsSession:
             await asyncio.wait_for(self.finish_context(context_id), self.settings.tts_check_timeout_seconds)
         except asyncio.TimeoutError:
             log.warning("the voice check timed out after %.0f s", self.settings.tts_check_timeout_seconds)
-        return total
+        return bytes(sound)
 
     async def send_text(self, context_id, text, flush=False):
         websocket = self.websocket
