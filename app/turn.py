@@ -12,6 +12,7 @@ import uuid
 from contextlib import suppress
 
 from .agent import run_agent
+from .booking.speech import tidy_numbers
 from .chunker import extract_speakable_chunks
 from .tools import ToolContext
 
@@ -46,6 +47,7 @@ class Turn:
 
         self.model_chunks = []  # the approved phrases that make up the answer (not the filler)
         self.sent_chunks = []  # everything sent to TTS, in order (used to estimate what was heard)
+        self._display = []  # the same, for the page: shown with plain numbers
         self.audio_bytes = 0  # audio received from TTS so far
         self.finished = False  # True once ALL audio has been generated
 
@@ -87,7 +89,8 @@ class Turn:
 
     @property
     def answer(self):
-        return " ".join(self.model_chunks).strip()
+        """What the assistant said, as plain text with plain numbers (this goes into the conversation history)."""
+        return tidy_numbers(" ".join(self.model_chunks)).strip()
 
     @property
     def audio_ms(self):
@@ -105,12 +108,12 @@ class Turn:
         ratio = min(1.0, played_ms / max(self.audio_ms, 1.0))
         cut = int(len(sent) * ratio)
         if cut >= len(sent):
-            return sent
+            return tidy_numbers(sent)
         text = sent[:cut]
         if not sent[cut].isspace():  # do not end in the middle of a word
             space = text.rfind(" ")
             text = text[:space] if space > 0 else ""
-        return text.strip()
+        return tidy_numbers(text.strip())
 
     # ---------------------------------------------------------------- the work
     async def _run(self):
@@ -229,7 +232,9 @@ class Turn:
         self.sent_chunks.append(text)
         if model:
             self.model_chunks.append(text)
-        await self.send_event({"type": "assistant_text", "text": text + " "})
+        # The page always gets the whole reply so far with plain numbers (a number can be cut between two phrases).
+        self._display.append(text)
+        await self.send_event({"type": "assistant_text", "text": tidy_numbers(" ".join(self._display)), "replace": True})
         await self.tts.send_text(self._context_id, text + " ", flush=flush)
 
     async def _early_filler(self, name, answer_is_ready):

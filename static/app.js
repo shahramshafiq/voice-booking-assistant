@@ -288,7 +288,10 @@ function onServerMessage(event) {
             warningEl.hidden = true;
             break;
         case "assistant_text":
-            if (assistantBubble) assistantBubble.textContent += message.text;
+            if (assistantBubble) {
+                if (message.replace) assistantBubble.textContent = message.text;
+                else assistantBubble.textContent += message.text;
+            }
             break;
         case "audio_end":
             if (playerNode) playerNode.port.postMessage({ type: "end" });

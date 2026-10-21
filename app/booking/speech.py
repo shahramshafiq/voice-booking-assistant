@@ -1,4 +1,11 @@
-"""Turns dates, times and numbers into words that sound natural when a voice reads them aloud."""
+"""Turns dates, times and numbers into words that sound natural when a voice reads them aloud,
+and turns the spoken digits back into plain numbers for the page and the conversation history."""
+import re
+
+# the two shapes a number takes when it is read one digit at a time
+GROUPED_DIGITS = r"(?:\d \d \d, )+\d(?: \d){0,2}"  # 0 3 0, 0 1 2, 3 4 5, 6 7  (what spell_digits writes)
+SPACED_DIGITS = r"\d(?: \d){3,}"  # 5 5 0 7 8 1  (what the assistant itself may write)
+SPOKEN_NUMBER = re.compile(rf"(?<!\d)(?:{GROUPED_DIGITS}|{SPACED_DIGITS})(?!\d)")
 
 
 def say_time(moment):
@@ -22,6 +29,21 @@ def say_day(day, today):
 def say_slot(start, today):
     """'tomorrow at 3 PM'."""
     return f"{say_day(start.date(), today)} at {say_time(start)}"
+
+
+def tidy_numbers(text):
+    """Written form of spoken digits: '0 3 0, 0 1 2, 3 4 5, 6 7' -> '0300 1234567', '5 5 0, 7 8 1' -> '550781'.
+
+    The voice still gets the spoken form (its pauses make digits easy to follow); this is for reading.
+    """
+
+    def join(match):
+        digits = re.sub(r"\D", "", match.group(0))
+        if len(digits) == 11 and digits.startswith("0"):
+            return f"{digits[:4]} {digits[4:]}"  # 0300 1234567
+        return digits
+
+    return SPOKEN_NUMBER.sub(join, text)
 
 
 def spell_digits(digits):

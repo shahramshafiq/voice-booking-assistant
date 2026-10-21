@@ -237,6 +237,10 @@ def test_a_full_booking_conversation(monkeypatch):
 
         await bench.say("Nine please, my name is Ali Raza and my number is 0300 1234567")
         assert "Just to confirm: a Consultation tomorrow at 9 AM, for Ali Raza" in bench.tts.spoken
+        assert "phone number 0 3 0, 0 1 2, 3 4 5, 6 7" in bench.tts.spoken  # spoken in groups
+        assert "phone number 0300 1234567. Shall I book it?" in bench.socket.of_type("assistant_text")[-1]["text"]  # shown plainly
+        remembered = bench.session.memory.messages[-1]["content"]
+        assert "phone number 0300 1234567." in remembered and "0 3 0" not in remembered  # and remembered plainly
         assert bench.fake_google.events == {}  # nothing is booked before the yes
         assert len(llm.calls) == 3  # the confirmation question cost no extra model call
 
@@ -246,7 +250,9 @@ def test_a_full_booking_conversation(monkeypatch):
         spoken = bench.tts.spoken
         reference = next(iter(bench.fake_google.events.values()))["extendedProperties"]["private"]["bookingRef"]
         assert "Done. Your Consultation is booked for tomorrow at 9 AM." in spoken
-        assert f"Your booking reference is {spell_digits(reference)}." in spoken
+        assert f"Your booking reference is {spell_digits(reference)}." in spoken  # the voice gets digits with pauses
+        shown = bench.socket.of_type("assistant_text")[-1]["text"]
+        assert f"Your booking reference is {reference}." in shown and ", " not in shown.split("reference is")[1][:12]  # the page does not
         assert bench.session.memory.recent_actions
         assert bench.session.memory.messages[-1]["content"].startswith("Done. Your Consultation")
 
