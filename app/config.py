@@ -112,6 +112,15 @@ class _Reader:
                 self.problems.append(f"{name} has a bad pattern {pattern!r}: {exc}")
         return patterns
 
+    def reply_template(self, name):
+        """A spoken sentence with {service}, {when} and {reference} blanks. Checked now, so a typo shows up at startup."""
+        text = self.text(name)
+        try:
+            text.format(service="x", when="y", reference="z")
+        except (KeyError, IndexError, ValueError) as exc:
+            self.problems.append(f"{name} may only use the blanks {{service}}, {{when}} and {{reference}} ({type(exc).__name__}: {exc})")
+        return text
+
     def file_text(self, name):
         value = self._raw(name)
         if value is None:
@@ -204,6 +213,12 @@ class Settings:
     tool_filler_read: List[str]
     tool_filler_write: List[str]
     tool_filler_write_delay_seconds: float
+
+    # what is said when a change has been made
+    reply_booked: str
+    reply_already_booked: str
+    reply_rescheduled: str
+    reply_cancelled: str
 
     # guardrails
     input_max_chars: int
@@ -338,6 +353,10 @@ def load_settings():
         tool_filler_read=r.text_list("TOOL_FILLER_READ", separator="|"),
         tool_filler_write=r.text_list("TOOL_FILLER_WRITE", separator="|"),
         tool_filler_write_delay_seconds=r.number("TOOL_FILLER_WRITE_DELAY_SECONDS"),
+        reply_booked=r.reply_template("REPLY_BOOKED"),
+        reply_already_booked=r.reply_template("REPLY_ALREADY_BOOKED"),
+        reply_rescheduled=r.reply_template("REPLY_RESCHEDULED"),
+        reply_cancelled=r.reply_template("REPLY_CANCELLED"),
         input_max_chars=r.integer("INPUT_MAX_CHARS"),
         input_block_patterns=r.regex_list("INPUT_BLOCK_PATTERNS"),
         input_block_reply=r.text("INPUT_BLOCK_REPLY"),

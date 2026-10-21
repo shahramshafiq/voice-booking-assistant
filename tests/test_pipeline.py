@@ -18,6 +18,7 @@ from app.booking.calendar_client import CalendarClient
 from app.booking.service import BookingService
 from app.config import settings
 from app.guardrails.input_rail import InputRail
+from app.booking.speech import spell_digits
 from app.guardrails.output_rail import OutputRail
 from app.llm import LLMEvent
 from app.session import VoiceSession
@@ -198,18 +199,12 @@ def test_a_full_booking_conversation(monkeypatch):
         slots = last_tool_output(items)["slots"]
         return [text(f"I have {slots[0]['label']} or {slots[1]['label']}. Which would you like?")]
 
-    def confirmed(items):
-        result = last_tool_output(items)
-        assert result["ok"] is True
-        digits = " ".join(result["booking_reference"])
-        return [text(f"Done. I've booked your appointment. Your booking reference is {digits}.")]
-
     book = dict(customer_details={"name": "Ali Raza", "phone": "03001234567"}, service_id="consultation",
                 start_time="2026-10-20T09:00:00+05:00", end_time="2026-10-20T10:00:00+05:00")
     llm = ScriptedLLM(
         [tool("find_available_slots", service_id="consultation", date_range={"start_date": "tomorrow"})], offer,
         [tool("create_booking", **book)],
-        [tool("create_booking", **book)], confirmed,
+        [tool("create_booking", **book)],  # after the yes, the code announces the result: no further model call
     )
 
     async def scenario():
@@ -228,17 +223,19 @@ def test_a_full_booking_conversation(monkeypatch):
         assert len(llm.calls) == 3  # the confirmation question cost no extra model call
 
         await bench.say("Yes please")
+        assert len(llm.calls) == 4  # and announcing the booking cost none either
         assert len(bench.fake_google.events) == 1
         spoken = bench.tts.spoken
-        assert "I've booked your appointment" in spoken and "reference is" in spoken
         reference = next(iter(bench.fake_google.events.values()))["extendedProperties"]["private"]["bookingRef"]
-        assert " ".join(reference) in spoken
+        assert "Done. Your Consultation is booked for tomorrow at 9 AM." in spoken
+        assert f"Your booking reference is {spell_digits(reference)}." in spoken
         assert bench.session.memory.recent_actions
+        assert bench.session.memory.messages[-1]["content"].startswith("Done. Your Consultation")
 
-        # the model was given the facts it needs at the last question
+        # the model was given the facts it needs when the caller said yes
         last_input = llm.calls[-1]["input"]
         state = [i for i in last_input if i.get("role") == "system"][0]["content"]
-        assert "name Ali Raza" in state and "Actions completed in this call" in state
+        assert "name Ali Raza" in state and "Waiting for the caller to say yes or no" in state
         # earlier turns are remembered
         roles = [i.get("role") for i in last_input if i.get("role") in ("user", "assistant")]
         assert roles[:2] == ["user", "assistant"]

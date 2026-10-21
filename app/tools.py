@@ -22,6 +22,7 @@ from .booking.models import (
     BookingLookupArgs, CheckAvailabilityArgs, CreateBookingArgs, FindSlotsArgs, NoArgs, RescheduleArgs,
 )
 from .booking.service import BookingError
+from .booking.speech import spell_digits
 
 log = logging.getLogger("tools")
 
@@ -121,6 +122,17 @@ class ToolRunner:
         if self._no and self._no.search(cleaned):
             return False
         return bool(self._yes and self._yes.search(cleaned))
+
+    def success_reply(self, tool, result):
+        """The sentence to say after a change has really been made. Written by the code from the real result."""
+        if tool == "create_booking":
+            template = self.settings.reply_already_booked if result.get("already_booked") else self.settings.reply_booked
+        elif tool == "reschedule_booking":
+            template = self.settings.reply_rescheduled
+        else:
+            template = self.settings.reply_cancelled
+        return template.format(service=result.get("service"), when=result.get("label"),
+                               reference=spell_digits(str(result.get("booking_reference") or "")))
 
     def expects_confirmed_change(self, name, ctx):
         """Will this change tool probably run for real, because the caller is saying yes to the question just asked?
@@ -235,4 +247,8 @@ class ToolRunner:
                 self.record(spec.name, args, done.result())
 
         change.add_done_callback(remember)
-        return await asyncio.shield(change), True
+        result = await asyncio.shield(change)
+        if result.get("ok"):
+            # No second model call is needed to announce it: the code says it, with the real numbers.
+            result["say"] = self.success_reply(spec.name, result)
+        return result, True

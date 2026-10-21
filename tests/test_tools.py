@@ -140,6 +140,8 @@ def test_yes_in_the_next_turn_makes_the_booking():
     ctx = turn(memory, "Yes, please go ahead")
     result = call(runner, "create_booking", BOOK, ctx)
     assert result["ok"] and len(fake.events) == 1
+    assert result["say"].startswith("Done. Your Consultation is booked for tomorrow at 9 AM. Your booking reference is ")
+    assert "say" not in json.loads(for_model(result))  # the model is never shown the sentence
     assert "create_booking" in memory.achieved
     assert memory.pending is None and result["booking_reference"] in memory.known_refs
     assert memory.recent_actions and "booked Consultation" in memory.recent_actions[0]
