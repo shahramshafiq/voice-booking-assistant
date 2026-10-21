@@ -24,14 +24,25 @@ SECRET_PATTERNS = [
 ]
 
 BOOKED = {"create_booking", "reschedule_booking", "get_booking"}  # a looked-up booking may also be called confirmed
+
+
+def _claim(verbs):
+    """'I've booked it', 'Your Consultation for Wednesday at 3 PM is now booked', 'It has been booked'.
+    'That time is already booked' (meaning taken) is not a claim and passes."""
+    done = rf"(?:'s|is|are|was|has been|have been)\s+(?:now\s+|all\s+|successfully\s+)?(?:{verbs})\b"
+    return re.compile(
+        rf"\b(?:i(?:'ve| have)|we(?:'ve| have))\s+(?:now\s+|just\s+|already\s+|successfully\s+)?(?:{verbs})\b"
+        rf"|\b(?:your|the)\s+(?:appointment|booking|consultation|follow-up|session)\b[^.?!]{{0,60}}?\b{done}"
+        rf"|\b(?:it|that|everything)\s*{done}",
+        re.IGNORECASE,
+    )
+
+
 CLAIMS = [
-    (re.compile(r"\b(?:i(?:'ve| have)|we(?:'ve| have)) (?:now |just |already )?(?:booked|scheduled)\b"
-                r"|\b(?:your (?:appointment|booking|consultation|follow-up|session)|it)(?:'s| is| has been| was) (?:now )?(?:booked|confirmed|scheduled)\b"
-                r"|\byou(?:'re| are) (?:booked|confirmed)\b|\bbooking (?:is )?confirmed\b", re.IGNORECASE), BOOKED),
-    (re.compile(r"\b(?:i(?:'ve| have)|we(?:'ve| have)) (?:now |just |already )?cancell?ed\b"
-                r"|\byour (?:appointment|booking|consultation|follow-up|session)(?: is| has been| was) (?:now )?cancell?ed\b", re.IGNORECASE), {"cancel_booking"}),
-    (re.compile(r"\b(?:i(?:'ve| have)|we(?:'ve| have)) (?:now |just |already )?(?:rescheduled|moved)\b"
-                r"|\byour (?:appointment|booking|consultation|follow-up|session)(?: is| has been| was) (?:now )?(?:rescheduled|moved)\b", re.IGNORECASE), {"reschedule_booking"}),
+    (_claim("booked|confirmed|scheduled"), BOOKED),
+    (re.compile(r"\byou(?:'re| are) (?:booked|confirmed)\b|\bbooking (?:is )?confirmed\b", re.IGNORECASE), BOOKED),
+    (_claim("cancell?ed"), {"cancel_booking"}),
+    (_claim("rescheduled|moved"), {"reschedule_booking"}),
     (re.compile(r"\byou(?:'re| are) all set\b", re.IGNORECASE), {"create_booking", "reschedule_booking", "cancel_booking"}),
 ]
 

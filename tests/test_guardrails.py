@@ -82,6 +82,15 @@ def test_success_claims_need_a_real_success():
     assert check("I've booked your appointment.", write_ok={"create_booking"}).ok
     assert not check("I've cancelled it.", write_ok={"create_booking"}).ok  # a booking does not prove a cancellation
     assert check("I've cancelled it.", write_ok={"cancel_booking"}).ok
+    # a claim with more words in the middle (said by the real model when it skipped the tool)
+    claim = "Your Consultation for Wednesday 21 October at 3 PM is now cancelled."
+    assert not check(claim, write_ok={"create_booking"}).ok and check(claim, write_ok={"cancel_booking"}).ok
+    assert not check("Your appointment for tomorrow at ten thirty AM is booked, Abdullah.").ok
+    assert not check("It has been moved to Friday.").ok
+    # but saying a time is taken, or that something did NOT happen, is not a claim
+    for phrase in ("Sorry, 12 PM is already booked, but 1 PM is free.", "Your booking was not cancelled.",
+                   "An appointment can be cancelled up to 24 hours before it starts."):
+        assert check(phrase).ok, phrase
     assert check("You are all set.", write_ok={"cancel_booking"}).ok
     assert check("That slot is already booked, sorry.").ok  # saying a slot is taken is not a claim
     assert check("Would you like me to book it?").ok
