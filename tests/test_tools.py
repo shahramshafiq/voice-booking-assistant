@@ -189,6 +189,7 @@ def test_plain_yes_and_no_are_recognised_but_only_right_after_the_question():
     call(runner, "create_booking", BOOK, turn(memory, "book it"))
     decisions = {
         "Yes": "yes", "Yes please go ahead": "yes", "okay": "yes", "Yeah, that's right": "yes", "Sure, go ahead.": "yes",
+        "Uh, Yeah. Of course.": "yes", "Of course.": "yes", "Of course not": None,
         "No": "no", "No thanks": "no", "Nope, don't do it": "no", "wait": "no", "never mind": "no",
         "yes but not tomorrow": None, "Yes, and what are your hours": None, "hmm let me think": None,
         "thanks": None, "make it three pm": None, "": None,
